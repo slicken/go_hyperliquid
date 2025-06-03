@@ -3,8 +3,14 @@ package hyperliquid
 const GLOBAL_DEBUG = false // Default debug that is used in all tests
 
 // API constants
-const MAINNET_API_URL = "https://api.hyperliquid.xyz"
-const TESTNET_API_URL = "https://api.hyperliquid-testnet.xyz"
+const (
+	MAINNET_API_URL = "https://api.hyperliquid.xyz"
+	TESTNET_API_URL = "https://api.hyperliquid-testnet.xyz"
+
+	// WebSocket URLs
+	MainnetWSURL = "wss://api.hyperliquid.xyz/ws"
+	TestnetWSURL = "wss://api.hyperliquid-testnet.xyz/ws"
+)
 
 // Execution constants
 const DEFAULT_SLIPPAGE = 0.005 // 0.5% default slippage

@@ -1,9 +1,10 @@
-module github.com/Logarithm-Labs/go-hyperliquid/hyperliquid
+module github.com/slicken/go-hyperliquid
 
 go 1.23.4
 
 require (
 	github.com/ethereum/go-ethereum v1.14.13
+	github.com/gorilla/websocket v1.5.3
 	github.com/sirupsen/logrus v1.9.3
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 )

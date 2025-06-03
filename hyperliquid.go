@@ -3,11 +3,18 @@ package hyperliquid
 type IHyperliquid interface {
 	IExchangeAPI
 	IInfoAPI
+	ConnectWebSocket() error
+	DisconnectWebSocket() error
+	SubscribeOrderbook(coin string, handler SubscriptionHandler) error
+	SubscribeTrades(coin string, handler SubscriptionHandler) error
+	SubscribeUserFills(user string, handler SubscriptionHandler) error
+	SubscribeAllMids(handler SubscriptionHandler) error
 }
 
 type Hyperliquid struct {
 	ExchangeAPI
 	InfoAPI
+	WebSocket *WebSocketClient
 }
 
 // HyperliquidClientConfig is a configuration struct for Hyperliquid API.
@@ -36,15 +43,18 @@ func NewHyperliquid(config *HyperliquidClientConfig) *Hyperliquid {
 	exchangeAPI.SetAccountAddress(defaultConfig.AccountAddress)
 	infoAPI := NewInfoAPI(defaultConfig.IsMainnet)
 	infoAPI.SetAccountAddress(defaultConfig.AccountAddress)
+	webSocket := NewWebSocketClient(defaultConfig.IsMainnet)
 	return &Hyperliquid{
 		ExchangeAPI: *exchangeAPI,
 		InfoAPI:     *infoAPI,
+		WebSocket:   webSocket,
 	}
 }
 
 func (h *Hyperliquid) SetDebugActive() {
 	h.ExchangeAPI.SetDebugActive()
 	h.InfoAPI.SetDebugActive()
+	h.WebSocket.SetDebugActive()
 }
 
 func (h *Hyperliquid) SetPrivateKey(privateKey string) error {
@@ -66,4 +76,29 @@ func (h *Hyperliquid) AccountAddress() string {
 
 func (h *Hyperliquid) IsMainnet() bool {
 	return h.ExchangeAPI.IsMainnet()
+}
+
+// WebSocket methods
+func (h *Hyperliquid) ConnectWebSocket() error {
+	return h.WebSocket.Connect()
+}
+
+func (h *Hyperliquid) DisconnectWebSocket() error {
+	return h.WebSocket.Disconnect()
+}
+
+func (h *Hyperliquid) SubscribeOrderbook(coin string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeOrderbook(coin, handler)
+}
+
+func (h *Hyperliquid) SubscribeTrades(coin string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeTrades(coin, handler)
+}
+
+func (h *Hyperliquid) SubscribeUserFills(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeUserFills(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeAllMids(handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeAllMids(handler)
 }
