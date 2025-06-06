@@ -1,4 +1,4 @@
-module github.com/slicken/go-hyperliquid
+module github.com/slicken/go_hyperliquid
 
 go 1.23.4
 

@@ -24,7 +24,7 @@ package main
 import (
 	"log"
 
-	"github.com/slicken/go-hyperliquid"
+	"github.com/slicken/go_hyperliquid"
 )
 
 func main() {
@@ -56,7 +56,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/slicken/go-hyperliquid"
+	"github.com/slicken/go_hyperliquid"
 )
 
 func main() {
@@ -146,7 +146,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/slicken/go-hyperliquid"
+	"github.com/slicken/go_hyperliquid"
 )
 
 func main() {
