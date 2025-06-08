@@ -60,6 +60,10 @@ func (ws *WebSocketClient) Connect() error {
 		return fmt.Errorf("failed to parse WebSocket URL: %w", err)
 	}
 
+	if ws.debug {
+		log.Printf("Connecting to WebSocket URL: %s", u.String())
+	}
+
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
@@ -68,6 +72,10 @@ func (ws *WebSocketClient) Connect() error {
 	ws.conn = conn
 	ws.isConnected = true
 	ws.reconnectCount = 0
+
+	if ws.debug {
+		log.Println("WebSocket connection established")
+	}
 
 	go ws.readMessages()
 	go ws.pingHandler()
@@ -110,23 +118,46 @@ func (ws *WebSocketClient) readMessages() {
 	for {
 		_, message, err := ws.conn.ReadMessage()
 		if err != nil {
+			if ws.debug {
+				log.Printf("WebSocket read error: %v", err)
+			}
 			if ws.reconnectCount < ws.maxReconnects {
 				ws.reconnect()
 			}
 			return
 		}
 
+		if ws.debug {
+			log.Printf("Received WebSocket message: %s", string(message))
+		}
+
 		var response WSResponse
 		if err := json.Unmarshal(message, &response); err != nil {
+			if ws.debug {
+				log.Printf("Failed to unmarshal WebSocket message: %v", err)
+			}
 			continue
+		}
+
+		if ws.debug {
+			log.Printf("Processing WebSocket message for channel: %s", response.Channel)
 		}
 
 		ws.mu.RLock()
 		if ch, exists := ws.subscriptions[response.Channel]; exists {
 			select {
 			case ch <- response.Data:
+				if ws.debug {
+					log.Printf("Sent data to channel: %s", response.Channel)
+				}
 			default:
-				// Channel full, skip message
+				if ws.debug {
+					log.Printf("Channel full, skipping message for: %s", response.Channel)
+				}
+			}
+		} else {
+			if ws.debug {
+				log.Printf("No subscription found for channel: %s", response.Channel)
 			}
 		}
 		ws.mu.RUnlock()
@@ -236,7 +267,7 @@ func (ws *WebSocketClient) SubscribeTrades(coin string, handler SubscriptionHand
 
 // SubscribeUserFills subscribes to user fill updates
 func (ws *WebSocketClient) SubscribeUserFills(user string, handler SubscriptionHandler) error {
-	channel := fmt.Sprintf("userFills:%s", user)
+	channel := "userFills"
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -249,7 +280,25 @@ func (ws *WebSocketClient) SubscribeUserFills(user string, handler SubscriptionH
 		}
 	}()
 
-	return ws.subscribe("userFills", map[string]interface{}{"user": user})
+	// Format the subscription message correctly
+	msg := map[string]interface{}{
+		"method": "subscribe",
+		"subscription": map[string]interface{}{
+			"type": "userFills",
+			"user": user,
+		},
+	}
+
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	ws.writeMu.Lock()
+	err = ws.conn.WriteMessage(websocket.TextMessage, b)
+	ws.writeMu.Unlock()
+
+	return err
 }
 
 // SubscribeAllMids subscribes to all mid price updates
