@@ -103,8 +103,8 @@ func (ws *WebSocketClient) IsConnected() bool {
 }
 
 // SetDebugActive enables debug mode
-func (ws *WebSocketClient) SetDebugActive() {
-	ws.debug = true
+func (ws *WebSocketClient) SetDebug(status bool) {
+	ws.debug = status
 }
 
 // readMessages reads messages from the WebSocket connection
@@ -317,4 +317,226 @@ func (ws *WebSocketClient) SubscribeAllMids(handler SubscriptionHandler) error {
 	}()
 
 	return ws.subscribe("allMids", nil)
+}
+
+// SubscribeUserEvents subscribes to user events for a specific user
+func (ws *WebSocketClient) SubscribeUserEvents(user string, handler SubscriptionHandler) error {
+	channel := "userEvents"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("userEvents", map[string]interface{}{"user": user})
+}
+
+// SubscribeUserFundings subscribes to user funding updates for a specific user
+func (ws *WebSocketClient) SubscribeUserFundings(user string, handler SubscriptionHandler) error {
+	channel := "userFundings"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("userFundings", map[string]interface{}{"user": user})
+}
+
+// SubscribeUserNonFundingLedgerUpdates subscribes to user non-funding ledger updates for a specific user
+func (ws *WebSocketClient) SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error {
+	channel := "userNonFundingLedgerUpdates"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("userNonFundingLedgerUpdates", map[string]interface{}{"user": user})
+}
+
+// SubscribeUserTwapSliceFills subscribes to user TWAP slice fills for a specific user
+func (ws *WebSocketClient) SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error {
+	channel := "userTwapSliceFills"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("userTwapSliceFills", map[string]interface{}{"user": user})
+}
+
+// SubscribeUserTwapHistory subscribes to user TWAP history for a specific user
+func (ws *WebSocketClient) SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error {
+	channel := "userTwapHistory"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("userTwapHistory", map[string]interface{}{"user": user})
+}
+
+// SubscribeActiveAssetCtx subscribes to active asset context for a specific coin
+func (ws *WebSocketClient) SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error {
+	channel := "activeAssetCtx"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("activeAssetCtx", map[string]interface{}{"coin": coin})
+}
+
+// SubscribeActiveAssetData subscribes to active asset data for a specific user and coin
+func (ws *WebSocketClient) SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error {
+	channel := "activeAssetData"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("activeAssetData", map[string]interface{}{
+		"user": user,
+		"coin": coin,
+	})
+}
+
+// SubscribeBbo subscribes to best bid/offer updates for a specific coin
+func (ws *WebSocketClient) SubscribeBbo(coin string, handler SubscriptionHandler) error {
+	channel := "bbo"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("bbo", map[string]interface{}{"coin": coin})
+}
+
+// SubscribeCandle subscribes to candle updates for a specific coin and interval
+func (ws *WebSocketClient) SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error {
+	channel := "candle"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("candle", map[string]interface{}{
+		"coin":     coin,
+		"interval": interval,
+	})
+}
+
+// SubscribeOrderUpdates subscribes to order updates for a specific user
+func (ws *WebSocketClient) SubscribeOrderUpdates(user string, handler SubscriptionHandler) error {
+	channel := "orderUpdates"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("orderUpdates", map[string]interface{}{"user": user})
+}
+
+// SubscribeNotification subscribes to notifications for a specific user
+func (ws *WebSocketClient) SubscribeNotification(user string, handler SubscriptionHandler) error {
+	channel := "notification"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("notification", map[string]interface{}{"user": user})
+}
+
+// SubscribeWebData2 subscribes to web data for a specific user
+func (ws *WebSocketClient) SubscribeWebData2(user string, handler SubscriptionHandler) error {
+	channel := "webData2"
+
+	ws.mu.Lock()
+	ch := make(chan interface{}, 100)
+	ws.subscriptions[channel] = ch
+	ws.mu.Unlock()
+
+	go func() {
+		for data := range ch {
+			handler(data)
+		}
+	}()
+
+	return ws.subscribe("webData2", map[string]interface{}{"user": user})
 }

@@ -1,7 +1,5 @@
 package hyperliquid
 
-const GLOBAL_DEBUG = false // Default debug that is used in all tests
-
 // API constants
 const (
 	MAINNET_API_URL = "https://api.hyperliquid.xyz"

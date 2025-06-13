@@ -10,9 +10,6 @@ import (
 
 func GetExchangeAPI() *ExchangeAPI {
 	exchangeAPI := NewExchangeAPI(false)
-	if GLOBAL_DEBUG {
-		exchangeAPI.SetDebugActive()
-	}
 	TEST_ADDRESS := os.Getenv("TEST_ADDRESS")
 	TEST_PRIVATE_KEY := os.Getenv("TEST_PRIVATE_KEY")
 	err := exchangeAPI.SetPrivateKey(TEST_PRIVATE_KEY)

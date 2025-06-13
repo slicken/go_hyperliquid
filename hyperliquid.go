@@ -9,6 +9,18 @@ type IHyperliquid interface {
 	SubscribeTrades(coin string, handler SubscriptionHandler) error
 	SubscribeUserFills(user string, handler SubscriptionHandler) error
 	SubscribeAllMids(handler SubscriptionHandler) error
+	SubscribeUserEvents(user string, handler SubscriptionHandler) error
+	SubscribeUserFundings(user string, handler SubscriptionHandler) error
+	SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error
+	SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error
+	SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error
+	SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error
+	SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error
+	SubscribeBbo(coin string, handler SubscriptionHandler) error
+	SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error
+	SubscribeOrderUpdates(user string, handler SubscriptionHandler) error
+	SubscribeNotification(user string, handler SubscriptionHandler) error
+	SubscribeWebData2(user string, handler SubscriptionHandler) error
 }
 
 type Hyperliquid struct {
@@ -49,12 +61,6 @@ func NewHyperliquid(config *HyperliquidClientConfig) *Hyperliquid {
 		InfoAPI:     *infoAPI,
 		WebSocket:   webSocket,
 	}
-}
-
-func (h *Hyperliquid) SetDebugActive() {
-	h.ExchangeAPI.SetDebugActive()
-	h.InfoAPI.SetDebugActive()
-	h.WebSocket.SetDebugActive()
 }
 
 func (h *Hyperliquid) SetPrivateKey(privateKey string) error {
@@ -101,4 +107,52 @@ func (h *Hyperliquid) SubscribeUserFills(user string, handler SubscriptionHandle
 
 func (h *Hyperliquid) SubscribeAllMids(handler SubscriptionHandler) error {
 	return h.WebSocket.SubscribeAllMids(handler)
+}
+
+func (h *Hyperliquid) SubscribeUserEvents(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeUserEvents(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeUserFundings(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeUserFundings(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeUserNonFundingLedgerUpdates(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeUserTwapSliceFills(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeUserTwapHistory(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeActiveAssetCtx(coin, handler)
+}
+
+func (h *Hyperliquid) SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeActiveAssetData(user, coin, handler)
+}
+
+func (h *Hyperliquid) SubscribeBbo(coin string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeBbo(coin, handler)
+}
+
+func (h *Hyperliquid) SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeCandle(coin, interval, handler)
+}
+
+func (h *Hyperliquid) SubscribeOrderUpdates(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeOrderUpdates(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeNotification(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeNotification(user, handler)
+}
+
+func (h *Hyperliquid) SubscribeWebData2(user string, handler SubscriptionHandler) error {
+	return h.WebSocket.SubscribeWebData2(user, handler)
 }

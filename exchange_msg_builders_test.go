@@ -7,9 +7,6 @@ import (
 
 func GetEmptyExchangeAPI() *ExchangeAPI {
 	exchangeAPI := NewExchangeAPI(true)
-	if GLOBAL_DEBUG {
-		exchangeAPI.SetDebugActive()
-	}
 	return exchangeAPI
 }
 

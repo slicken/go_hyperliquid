@@ -219,13 +219,15 @@ func main() {
 - Get candle data
 - Get funding rates
 - Get market prices
-- Get asset information
+- Get asset informationInfoA
 
 ## Error Handling
 The SDK includes comprehensive error handling and logging capabilities. Enable debug mode for detailed logs:
 
 ```go
-hl.SetDebugActive()
+hl.ExchangeAPI.Debug(bool)
+hl.InfoAPI.Debug(bool)
+hl.Websocket(bool)
 ```
 
 ## Rate Limiting

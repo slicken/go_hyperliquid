@@ -7,9 +7,6 @@ import (
 
 func GetInfoAPI() *InfoAPI {
 	api := NewInfoAPI(false)
-	if GLOBAL_DEBUG {
-		api.SetDebugActive()
-	}
 	// It should be active account to pass all tests
 	// like GetAccountFills, GetAccountWithdrawals, etc.
 	TEST_ADDRESS := os.Getenv("TEST_ADDRESS")

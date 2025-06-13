@@ -23,7 +23,7 @@ type IClient interface {
 	SetPrivateKey(privateKey string) error
 	SetAccountAddress(address string)
 	AccountAddress() string
-	SetDebugActive()
+	Debug(status bool)
 	IsMainnet() bool
 }
 
@@ -114,8 +114,8 @@ func (client *Client) IsMainnet() bool {
 }
 
 // SetDebugActive enables debug mode.
-func (client *Client) SetDebugActive() {
-	client.Debug = true
+func (client *Client) SetDebug(status bool) {
+	client.Debug = status
 }
 
 // Request sends a POST request to the HyperLiquid API.

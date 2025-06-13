@@ -12,9 +12,6 @@ func GetHyperliquidAPI() *Hyperliquid {
 		AccountAddress: os.Getenv("TEST_ADDRESS"),
 		PrivateKey:     os.Getenv("TEST_PRIVATE_KEY"),
 	})
-	if GLOBAL_DEBUG {
-		hl.SetDebugActive()
-	}
 	return hl
 }
 
@@ -35,7 +32,6 @@ func TestHyperliquid_CheckFieldsConsistency(t *testing.T) {
 	if hl.InfoAPI.baseUrl != apiUrl {
 		t.Errorf("baseUrl = %v, want %v", hl.InfoAPI.baseUrl, apiUrl)
 	}
-	hl.SetDebugActive()
 	if hl.InfoAPI.Debug != hl.ExchangeAPI.Debug {
 		t.Errorf("debug = %v, want %v", hl.InfoAPI.Debug, hl.ExchangeAPI.Debug)
 	}
