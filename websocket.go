@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,10 +192,90 @@ func (ws *WebSocketClient) reconnect() {
 
 	time.Sleep(backoff)
 
+	// Store current subscriptions before reconnecting
+	ws.mu.RLock()
+	activeSubscriptions := make(map[string]map[string]interface{})
+	for channel := range ws.subscriptions {
+		activeSubscriptions[channel] = make(map[string]interface{})
+		// Get the subscription parameters from the channel name
+		// This assumes the channel name contains the necessary parameters
+		// For example: "userFills:0x123" or "orderbook:BTC"
+		parts := strings.Split(channel, ":")
+		if len(parts) > 1 {
+			activeSubscriptions[channel]["type"] = parts[0]
+			activeSubscriptions[channel]["params"] = parts[1:]
+		}
+	}
+	ws.mu.RUnlock()
+
 	if err := ws.Connect(); err != nil {
 		log.Printf("Reconnection failed: %v", err)
 	} else {
 		log.Println("Reconnected successfully")
+
+		// Resubscribe to all active subscriptions
+		for channel, params := range activeSubscriptions {
+			if subType, ok := params["type"].(string); ok {
+				subParams := make(map[string]interface{})
+				if paramList, ok := params["params"].([]string); ok {
+					for i, param := range paramList {
+						subParams[fmt.Sprintf("param%d", i)] = param
+					}
+				}
+
+				// Resubscribe using the appropriate method based on subscription type
+				switch subType {
+				case "userFills":
+					if len(subParams) > 0 {
+						ws.SubscribeUserFills(subParams["param0"].(string), func(data interface{}) {
+							if ch, exists := ws.subscriptions[channel]; exists {
+								ch <- data
+							}
+						})
+					}
+				case "orderbook":
+					if len(subParams) > 0 {
+						ws.SubscribeOrderbook(subParams["param0"].(string), func(data interface{}) {
+							if ch, exists := ws.subscriptions[channel]; exists {
+								ch <- data
+							}
+						})
+					}
+				case "trades":
+					if len(subParams) > 0 {
+						ws.SubscribeTrades(subParams["param0"].(string), func(data interface{}) {
+							if ch, exists := ws.subscriptions[channel]; exists {
+								ch <- data
+							}
+						})
+					}
+				case "userEvents":
+					if len(subParams) > 0 {
+						ws.SubscribeUserEvents(subParams["param0"].(string), func(data interface{}) {
+							if ch, exists := ws.subscriptions[channel]; exists {
+								ch <- data
+							}
+						})
+					}
+				case "orderUpdates":
+					if len(subParams) > 0 {
+						ws.SubscribeOrderUpdates(subParams["param0"].(string), func(data interface{}) {
+							if ch, exists := ws.subscriptions[channel]; exists {
+								ch <- data
+							}
+						})
+					}
+				case "notification":
+					if len(subParams) > 0 {
+						ws.SubscribeNotification(subParams["param0"].(string), func(data interface{}) {
+							if ch, exists := ws.subscriptions[channel]; exists {
+								ch <- data
+							}
+						})
+					}
+				}
+			}
+		}
 	}
 }
 
