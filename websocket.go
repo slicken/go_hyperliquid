@@ -14,15 +14,17 @@ import (
 
 // WebSocketClient handles WebSocket connections and subscriptions
 type WebSocketClient struct {
-	conn           *websocket.Conn
-	url            string
-	subscriptions  map[string]chan interface{}
-	mu             sync.RWMutex
-	writeMu        sync.Mutex
-	reconnectCount int
-	maxReconnects  int
-	isConnected    bool
-	debug          bool
+	conn             *websocket.Conn
+	url              string
+	subscriptions    map[string]chan interface{}
+	activeSubs       []string // Store active subscription channel names
+	mu               sync.RWMutex
+	writeMu          sync.Mutex
+	reconnectCount   int
+	maxReconnects    int
+	isConnected      bool
+	debug            bool
+	manualDisconnect bool // Flag to prevent auto-reconnect on manual disconnect
 }
 
 // WSSubscription represents a WebSocket subscription request
@@ -50,6 +52,7 @@ func NewWebSocketClient(isMainnet bool) *WebSocketClient {
 	return &WebSocketClient{
 		url:           wsURL,
 		subscriptions: make(map[string]chan interface{}),
+		activeSubs:    make([]string, 0),
 		maxReconnects: 5,
 	}
 }
@@ -72,6 +75,7 @@ func (ws *WebSocketClient) Connect() error {
 
 	ws.conn = conn
 	ws.isConnected = true
+	ws.manualDisconnect = false // Reset manual disconnect flag
 	ws.reconnectCount = 0
 
 	if ws.debug {
@@ -84,12 +88,14 @@ func (ws *WebSocketClient) Connect() error {
 	return nil
 }
 
-// Disconnect closes the WebSocket connection
+// Disconnect closes the WebSocket connection and prevents auto-reconnect
 func (ws *WebSocketClient) Disconnect() error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
 	ws.isConnected = false
+	ws.manualDisconnect = true // Prevent auto-reconnect
+	ws.reconnectCount = 0      // Reset reconnect count on manual disconnect
 	if ws.conn != nil {
 		return ws.conn.Close()
 	}
@@ -122,7 +128,12 @@ func (ws *WebSocketClient) readMessages() {
 			if ws.debug {
 				log.Printf("WebSocket read error: %v", err)
 			}
-			if ws.reconnectCount < ws.maxReconnects {
+			// Don't reconnect if manually disconnected
+			ws.mu.RLock()
+			manualDisconnect := ws.manualDisconnect
+			ws.mu.RUnlock()
+
+			if !manualDisconnect && ws.reconnectCount < ws.maxReconnects {
 				ws.reconnect()
 			}
 			return
@@ -144,24 +155,41 @@ func (ws *WebSocketClient) readMessages() {
 			log.Printf("Processing WebSocket message for channel: %s", response.Channel)
 		}
 
+		// Try to find a matching subscription channel
 		ws.mu.RLock()
-		if ch, exists := ws.subscriptions[response.Channel]; exists {
-			select {
-			case ch <- response.Data:
-				if ws.debug {
-					log.Printf("Sent data to channel: %s", response.Channel)
-				}
-			default:
-				if ws.debug {
-					log.Printf("Channel full, skipping message for: %s", response.Channel)
-				}
+		var found bool
+		for channel := range ws.subscriptions {
+			parts := strings.Split(channel, ":")
+			if len(parts) != 2 {
+				continue
 			}
-		} else {
-			if ws.debug {
-				log.Printf("No subscription found for channel: %s", response.Channel)
+			subType := parts[0]
+			param := parts[1]
+
+			// Check if this message matches our subscription
+			if (subType == "userFills" && response.Channel == "userFills" && param == response.Data.(map[string]interface{})["user"]) ||
+				(subType == "l2Book" && response.Channel == "l2Book" && param == response.Data.(map[string]interface{})["coin"]) ||
+				(subType == "trades" && response.Channel == "trades" && param == response.Data.(map[string]interface{})["coin"]) {
+				if ch, exists := ws.subscriptions[channel]; exists {
+					select {
+					case ch <- response.Data:
+						if ws.debug {
+							log.Printf("Sent data to channel: %s", channel)
+						}
+						found = true
+					default:
+						if ws.debug {
+							log.Printf("Channel full, skipping message for: %s", channel)
+						}
+					}
+				}
 			}
 		}
 		ws.mu.RUnlock()
+
+		if !found && ws.debug {
+			log.Printf("No matching subscription found for message: %s", string(message))
+		}
 	}
 }
 
@@ -170,16 +198,19 @@ func (ws *WebSocketClient) pingHandler() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			if ws.IsConnected() {
-				ws.writeMu.Lock()
-				err := ws.conn.WriteMessage(websocket.PingMessage, nil)
-				ws.writeMu.Unlock()
-				if err != nil {
-					return
+	for range ticker.C {
+		if ws.IsConnected() {
+			ws.writeMu.Lock()
+			err := ws.conn.WriteMessage(websocket.PingMessage, nil)
+			ws.writeMu.Unlock()
+			if err != nil {
+				if ws.debug {
+					log.Printf("Ping failed: %v", err)
 				}
+				return
+			}
+			if ws.debug {
+				log.Printf("Ping sent successfully")
 			}
 		}
 	}
@@ -192,21 +223,20 @@ func (ws *WebSocketClient) reconnect() {
 
 	time.Sleep(backoff)
 
-	// Store current subscriptions before reconnecting
+	// Store active subscriptions before reconnecting
 	ws.mu.RLock()
-	activeSubscriptions := make(map[string]map[string]interface{})
-	for channel := range ws.subscriptions {
-		activeSubscriptions[channel] = make(map[string]interface{})
-		// Get the subscription parameters from the channel name
-		// This assumes the channel name contains the necessary parameters
-		// For example: "userFills:0x123" or "orderbook:BTC"
-		parts := strings.Split(channel, ":")
-		if len(parts) > 1 {
-			activeSubscriptions[channel]["type"] = parts[0]
-			activeSubscriptions[channel]["params"] = parts[1:]
-		}
-	}
+	activeSubs := make([]string, len(ws.activeSubs))
+	copy(activeSubs, ws.activeSubs)
 	ws.mu.RUnlock()
+
+	// Close the old connection first to stop existing goroutines
+	ws.mu.Lock()
+	if ws.conn != nil {
+		ws.conn.Close()
+		ws.conn = nil
+	}
+	ws.isConnected = false
+	ws.mu.Unlock()
 
 	if err := ws.Connect(); err != nil {
 		log.Printf("Reconnection failed: %v", err)
@@ -214,65 +244,87 @@ func (ws *WebSocketClient) reconnect() {
 		log.Println("Reconnected successfully")
 
 		// Resubscribe to all active subscriptions
-		for channel, params := range activeSubscriptions {
-			if subType, ok := params["type"].(string); ok {
-				subParams := make(map[string]interface{})
-				if paramList, ok := params["params"].([]string); ok {
-					for i, param := range paramList {
-						subParams[fmt.Sprintf("param%d", i)] = param
-					}
+		for _, channel := range activeSubs {
+			parts := strings.Split(channel, ":")
+			if len(parts) != 2 {
+				continue
+			}
+
+			subType := parts[0]
+			param := parts[1]
+
+			switch subType {
+			case "userFills":
+				msg := map[string]interface{}{
+					"method": "subscribe",
+					"subscription": map[string]interface{}{
+						"type": "userFills",
+						"user": param,
+					},
 				}
 
-				// Resubscribe using the appropriate method based on subscription type
-				switch subType {
-				case "userFills":
-					if len(subParams) > 0 {
-						ws.SubscribeUserFills(subParams["param0"].(string), func(data interface{}) {
-							if ch, exists := ws.subscriptions[channel]; exists {
-								ch <- data
-							}
-						})
-					}
-				case "orderbook":
-					if len(subParams) > 0 {
-						ws.SubscribeOrderbook(subParams["param0"].(string), func(data interface{}) {
-							if ch, exists := ws.subscriptions[channel]; exists {
-								ch <- data
-							}
-						})
-					}
-				case "trades":
-					if len(subParams) > 0 {
-						ws.SubscribeTrades(subParams["param0"].(string), func(data interface{}) {
-							if ch, exists := ws.subscriptions[channel]; exists {
-								ch <- data
-							}
-						})
-					}
-				case "userEvents":
-					if len(subParams) > 0 {
-						ws.SubscribeUserEvents(subParams["param0"].(string), func(data interface{}) {
-							if ch, exists := ws.subscriptions[channel]; exists {
-								ch <- data
-							}
-						})
-					}
-				case "orderUpdates":
-					if len(subParams) > 0 {
-						ws.SubscribeOrderUpdates(subParams["param0"].(string), func(data interface{}) {
-							if ch, exists := ws.subscriptions[channel]; exists {
-								ch <- data
-							}
-						})
-					}
-				case "notification":
-					if len(subParams) > 0 {
-						ws.SubscribeNotification(subParams["param0"].(string), func(data interface{}) {
-							if ch, exists := ws.subscriptions[channel]; exists {
-								ch <- data
-							}
-						})
-					}
+				b, err := json.Marshal(msg)
+				if err != nil {
+					log.Printf("Failed to marshal resubscription message: %v", err)
+					continue
+				}
+
+				ws.writeMu.Lock()
+				err = ws.conn.WriteMessage(websocket.TextMessage, b)
+				ws.writeMu.Unlock()
+
+				if err != nil {
+					log.Printf("Failed to send resubscription message: %v", err)
+				} else {
+					log.Printf("Resubscribed to user fills for user: %s", param)
+				}
+			case "l2Book":
+				msg := map[string]interface{}{
+					"method": "subscribe",
+					"subscription": map[string]interface{}{
+						"type": "l2Book",
+						"coin": param,
+					},
+				}
+
+				b, err := json.Marshal(msg)
+				if err != nil {
+					log.Printf("Failed to marshal resubscription message: %v", err)
+					continue
+				}
+
+				ws.writeMu.Lock()
+				err = ws.conn.WriteMessage(websocket.TextMessage, b)
+				ws.writeMu.Unlock()
+
+				if err != nil {
+					log.Printf("Failed to send resubscription message: %v", err)
+				} else {
+					log.Printf("Resubscribed to orderbook for coin: %s", param)
+				}
+			case "trades":
+				msg := map[string]interface{}{
+					"method": "subscribe",
+					"subscription": map[string]interface{}{
+						"type": "trades",
+						"coin": param,
+					},
+				}
+
+				b, err := json.Marshal(msg)
+				if err != nil {
+					log.Printf("Failed to marshal resubscription message: %v", err)
+					continue
+				}
+
+				ws.writeMu.Lock()
+				err = ws.conn.WriteMessage(websocket.TextMessage, b)
+				ws.writeMu.Unlock()
+
+				if err != nil {
+					log.Printf("Failed to send resubscription message: %v", err)
+				} else {
+					log.Printf("Resubscribed to trades for coin: %s", param)
 				}
 			}
 		}
@@ -312,11 +364,12 @@ func (ws *WebSocketClient) subscribe(subType string, params map[string]interface
 
 // SubscribeOrderbook subscribes to orderbook updates for a specific coin
 func (ws *WebSocketClient) SubscribeOrderbook(coin string, handler SubscriptionHandler) error {
-	channel := "l2Book"
+	channel := fmt.Sprintf("l2Book:%s", coin)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -330,11 +383,12 @@ func (ws *WebSocketClient) SubscribeOrderbook(coin string, handler SubscriptionH
 
 // SubscribeTrades subscribes to trade updates for a specific coin
 func (ws *WebSocketClient) SubscribeTrades(coin string, handler SubscriptionHandler) error {
-	channel := "trades"
+	channel := fmt.Sprintf("trades:%s", coin)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -348,11 +402,12 @@ func (ws *WebSocketClient) SubscribeTrades(coin string, handler SubscriptionHand
 
 // SubscribeUserFills subscribes to user fill updates
 func (ws *WebSocketClient) SubscribeUserFills(user string, handler SubscriptionHandler) error {
-	channel := "userFills"
+	channel := fmt.Sprintf("userFills:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -407,6 +462,7 @@ func (ws *WebSocketClient) SubscribeUserEvents(user string, handler Subscription
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -425,6 +481,7 @@ func (ws *WebSocketClient) SubscribeUserFundings(user string, handler Subscripti
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -443,6 +500,7 @@ func (ws *WebSocketClient) SubscribeUserNonFundingLedgerUpdates(user string, han
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -461,6 +519,7 @@ func (ws *WebSocketClient) SubscribeUserTwapSliceFills(user string, handler Subs
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -479,6 +538,7 @@ func (ws *WebSocketClient) SubscribeUserTwapHistory(user string, handler Subscri
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -497,6 +557,7 @@ func (ws *WebSocketClient) SubscribeActiveAssetCtx(coin string, handler Subscrip
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -515,6 +576,7 @@ func (ws *WebSocketClient) SubscribeActiveAssetData(user string, coin string, ha
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -536,6 +598,7 @@ func (ws *WebSocketClient) SubscribeBbo(coin string, handler SubscriptionHandler
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -554,6 +617,7 @@ func (ws *WebSocketClient) SubscribeCandle(coin string, interval string, handler
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -575,6 +639,7 @@ func (ws *WebSocketClient) SubscribeOrderUpdates(user string, handler Subscripti
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -593,6 +658,7 @@ func (ws *WebSocketClient) SubscribeNotification(user string, handler Subscripti
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
@@ -611,6 +677,7 @@ func (ws *WebSocketClient) SubscribeWebData2(user string, handler SubscriptionHa
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
 	ws.subscriptions[channel] = ch
+	ws.activeSubs = append(ws.activeSubs, channel)
 	ws.mu.Unlock()
 
 	go func() {
