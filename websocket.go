@@ -147,12 +147,60 @@ func (ws *WebSocketClient) readMessages() {
 		if err := json.Unmarshal(message, &response); err != nil {
 			if ws.debug {
 				log.Printf("Failed to unmarshal WebSocket message: %v", err)
+				log.Printf("Raw message: %s", string(message))
 			}
 			continue
 		}
 
 		if ws.debug {
-			log.Printf("Processing WebSocket message for channel: %s", response.Channel)
+			log.Printf("Processing WebSocket message for channel: %s, data type: %T", response.Channel, response.Data)
+			if response.Data != nil {
+				log.Printf("Data content: %+v", response.Data)
+			}
+		}
+
+		// Check if this is a subscription acknowledgment
+		if response.Channel == "subscribed" || response.Channel == "subscription" || response.Channel == "subscriptionResponse" {
+			if ws.debug {
+				log.Printf("Received subscription acknowledgment: %+v", response.Data)
+			}
+			continue
+		}
+
+		// Check if this is a pong response to our ping
+		if response.Channel == "pong" {
+			if ws.debug {
+				log.Printf("Received pong response")
+			}
+			continue
+		}
+
+		// Log all messages for debugging
+		if ws.debug {
+			log.Printf("Processing message with channel: %s", response.Channel)
+		}
+
+		// If no channel field, try to parse as a different format
+		if response.Channel == "" {
+			if ws.debug {
+				log.Printf("No channel field found, trying alternative message format")
+			}
+			// Try to parse as a direct message without channel field
+			var directMsg map[string]interface{}
+			if err := json.Unmarshal(message, &directMsg); err == nil {
+				if ws.debug {
+					log.Printf("Parsed as direct message: %+v", directMsg)
+				}
+				// Try to extract channel from the message
+				if channel, exists := directMsg["channel"]; exists {
+					response.Channel = channel.(string)
+				} else if msgType, exists := directMsg["type"]; exists {
+					response.Channel = msgType.(string)
+				}
+				if data, exists := directMsg["data"]; exists {
+					response.Data = data
+				}
+			}
 		}
 
 		// Try to find a matching subscription channel
@@ -166,48 +214,134 @@ func (ws *WebSocketClient) readMessages() {
 			subType := parts[0]
 			param := parts[1]
 
+			if ws.debug {
+				log.Printf("Checking subscription: %s (type: %s, param: %s) against channel: %s", channel, subType, param, response.Channel)
+			}
+
 			// Check if this message matches our subscription
+			var matches bool
+
 			if subType == "userFills" && response.Channel == "userFills" {
-				// For userFills, check if the user matches
-				if userData, ok := response.Data.(map[string]interface{}); ok {
-					if user, exists := userData["user"]; exists && user == param {
-						if ch, exists := ws.subscriptions[channel]; exists {
-							select {
-							case ch <- response.Data:
-								if ws.debug {
-									log.Printf("Sent data to channel: %s", channel)
-								}
-								found = true
-							default:
-								if ws.debug {
-									log.Printf("Channel full, skipping message for: %s", channel)
-								}
-							}
+				// For userFills, check if the user matches (case-insensitive)
+				if dataMap, ok := response.Data.(map[string]interface{}); ok {
+					if user, exists := dataMap["user"]; exists {
+						userStr, ok := user.(string)
+						if ok && strings.EqualFold(userStr, param) {
+							matches = true
 						}
 					}
 				}
 			} else if subType == "l2Book" && response.Channel == "l2Book" {
-				// For orderbook, check if the coin matches
-				if bookData, ok := response.Data.(map[string]interface{}); ok {
-					if coin, exists := bookData["coin"]; exists && coin == param {
-						if ch, exists := ws.subscriptions[channel]; exists {
-							select {
-							case ch <- response.Data:
-								if ws.debug {
-									log.Printf("Sent data to channel: %s", channel)
-								}
-								found = true
-							default:
-								if ws.debug {
-									log.Printf("Channel full, skipping message for: %s", channel)
+				// For l2Book, check if the coin matches
+				if dataMap, ok := response.Data.(map[string]interface{}); ok {
+					if coin, exists := dataMap["coin"]; exists && coin == param {
+						matches = true
+					}
+				}
+			} else if subType == "trades" && response.Channel == "trades" {
+				// For trades, accept any trades message when subscribed to trades
+				// This is because Hyperliquid might send all trades regardless of coin subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting trades message for subscription: %s", channel)
+				}
+			} else if subType == "orderUpdates" && response.Channel == "orderUpdates" {
+				// For orderUpdates, accept all messages since they're already filtered by the subscription
+				// The data is an array of order updates
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting orderUpdates message for subscription: %s", channel)
+				}
+			} else if subType == "userEvents" && response.Channel == "userEvents" {
+				// For userEvents, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting userEvents message for subscription: %s", channel)
+				}
+			} else if subType == "userFundings" && response.Channel == "userFundings" {
+				// For userFundings, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting userFundings message for subscription: %s", channel)
+				}
+			} else if subType == "userNonFundingLedgerUpdates" && response.Channel == "userNonFundingLedgerUpdates" {
+				// For userNonFundingLedgerUpdates, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting userNonFundingLedgerUpdates message for subscription: %s", channel)
+				}
+			} else if subType == "userTwapSliceFills" && response.Channel == "userTwapSliceFills" {
+				// For userTwapSliceFills, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting userTwapSliceFills message for subscription: %s", channel)
+				}
+			} else if subType == "userTwapHistory" && response.Channel == "userTwapHistory" {
+				// For userTwapHistory, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting userTwapHistory message for subscription: %s", channel)
+				}
+			} else if subType == "activeAssetCtx" && response.Channel == "activeAssetCtx" {
+				// For activeAssetCtx, check if the coin matches
+				if dataMap, ok := response.Data.(map[string]interface{}); ok {
+					if coin, exists := dataMap["coin"]; exists && coin == param {
+						matches = true
+					}
+				}
+			} else if subType == "activeAssetData" && response.Channel == "activeAssetData" {
+				// For activeAssetData, check if the user and coin match
+				parts := strings.Split(param, ":")
+				if len(parts) == 2 {
+					userParam := parts[0]
+					coinParam := parts[1]
+					if dataMap, ok := response.Data.(map[string]interface{}); ok {
+						if user, exists := dataMap["user"]; exists {
+							userStr, ok := user.(string)
+							if ok && strings.EqualFold(userStr, userParam) {
+								if coin, exists := dataMap["coin"]; exists && coin == coinParam {
+									matches = true
 								}
 							}
 						}
 					}
 				}
-			} else if subType == "trades" && response.Channel == "trades" {
-				// For trades, the server should filter by coin, so we just need to match the channel
-				// But we need to handle the data structure safely
+			} else if subType == "bbo" && response.Channel == "bbo" {
+				// For bbo, check if the coin matches
+				if dataMap, ok := response.Data.(map[string]interface{}); ok {
+					if coin, exists := dataMap["coin"]; exists && coin == param {
+						matches = true
+					}
+				}
+			} else if subType == "candle" && response.Channel == "candle" {
+				// For candle, check if the coin and interval match
+				parts := strings.Split(param, ":")
+				if len(parts) == 2 {
+					coinParam := parts[0]
+					intervalParam := parts[1]
+					if dataMap, ok := response.Data.(map[string]interface{}); ok {
+						if coin, exists := dataMap["coin"]; exists && coin == coinParam {
+							if interval, exists := dataMap["interval"]; exists && interval == intervalParam {
+								matches = true
+							}
+						}
+					}
+				}
+			} else if subType == "notification" && response.Channel == "notification" {
+				// For notification, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting notification message for subscription: %s", channel)
+				}
+			} else if subType == "webData2" && response.Channel == "webData2" {
+				// For webData2, accept all messages since they're already filtered by the subscription
+				matches = true
+				if ws.debug {
+					log.Printf("Accepting webData2 message for subscription: %s", channel)
+				}
+			}
+
+			if matches {
 				if ch, exists := ws.subscriptions[channel]; exists {
 					select {
 					case ch <- response.Data:
@@ -226,7 +360,7 @@ func (ws *WebSocketClient) readMessages() {
 		ws.mu.RUnlock()
 
 		if !found && ws.debug {
-			log.Printf("No matching subscription found for message: %s", string(message))
+			log.Printf("No matching subscription found for message. Channel: %s, Data type: %T", response.Channel, response.Data)
 		}
 	}
 }
@@ -237,35 +371,35 @@ func (ws *WebSocketClient) pingHandler() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// Check if we should still be connected
-		ws.mu.RLock()
-		if !ws.isConnected || ws.manualDisconnect {
-			ws.mu.RUnlock()
-			return
-		}
-		conn := ws.conn
-		ws.mu.RUnlock()
-
-		if conn == nil {
-			return
-		}
-
-		ws.writeMu.Lock()
-		err := conn.WriteMessage(websocket.PingMessage, nil)
-		ws.writeMu.Unlock()
-
-		if err != nil {
-			if ws.debug {
-				log.Printf("Ping failed: %v", err)
+		if ws.IsConnected() {
+			// Use Hyperliquid's custom ping/pong protocol
+			// Client sends: { "method": "ping" }
+			// Server responds: { "channel": "pong" }
+			pingMsg := map[string]interface{}{
+				"method": "ping",
 			}
-			// Don't trigger reconnect here - let readMessages handle it
-			// Just close the connection to trigger the readMessages error
-			conn.Close()
-			return
-		}
 
-		if ws.debug {
-			log.Printf("Ping sent successfully")
+			b, err := json.Marshal(pingMsg)
+			if err != nil {
+				if ws.debug {
+					log.Printf("Failed to marshal ping message: %v", err)
+				}
+				continue
+			}
+
+			ws.writeMu.Lock()
+			err = ws.conn.WriteMessage(websocket.TextMessage, b)
+			ws.writeMu.Unlock()
+
+			if err != nil {
+				if ws.debug {
+					log.Printf("Ping failed: %v", err)
+				}
+				return
+			}
+			if ws.debug {
+				log.Printf("Ping sent successfully")
+			}
 		}
 	}
 }
@@ -273,8 +407,7 @@ func (ws *WebSocketClient) pingHandler() {
 // reconnect attempts to reconnect to the WebSocket server
 func (ws *WebSocketClient) reconnect() {
 	ws.reconnectCount++
-	// Exponential backoff: 1s, 2s, 4s, 8s, 16s
-	backoff := time.Duration(1<<(ws.reconnectCount-1)) * time.Second
+	backoff := time.Duration(ws.reconnectCount) * time.Second
 
 	time.Sleep(backoff)
 
@@ -295,12 +428,8 @@ func (ws *WebSocketClient) reconnect() {
 
 	if err := ws.Connect(); err != nil {
 		log.Printf("Reconnection failed: %v", err)
-		// Don't reset reconnect count on failure
-		return
 	} else {
 		log.Println("Reconnected successfully")
-		// Reset reconnect count on successful connection
-		ws.reconnectCount = 0
 
 		// Resubscribe to all active subscriptions
 		for _, channel := range activeSubs {
@@ -392,22 +521,33 @@ func (ws *WebSocketClient) reconnect() {
 
 // subscribe sends a subscription request to the WebSocket server
 func (ws *WebSocketClient) subscribe(subType string, params map[string]interface{}) error {
-	msg := map[string]interface{}{
-		"method": "subscribe",
-		"subscription": map[string]interface{}{
-			"type": subType,
-		},
+	// Try different subscription message formats
+	var msg map[string]interface{}
+
+	// Format 1: Standard format
+	subscription := map[string]interface{}{
+		"type": subType,
 	}
 
+	// Add parameters to the subscription
 	if params != nil {
 		for k, v := range params {
-			msg["subscription"].(map[string]interface{})[k] = v
+			subscription[k] = v
 		}
+	}
+
+	msg = map[string]interface{}{
+		"method":       "subscribe",
+		"subscription": subscription,
 	}
 
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
+	}
+
+	if ws.debug {
+		log.Printf("Sending subscription message (format 1): %s", string(b))
 	}
 
 	ws.writeMu.Lock()
@@ -416,6 +556,10 @@ func (ws *WebSocketClient) subscribe(subType string, params map[string]interface
 
 	if err != nil {
 		return err
+	}
+
+	if ws.debug {
+		log.Printf("Subscription message sent successfully for type: %s", subType)
 	}
 
 	return nil
@@ -516,7 +660,7 @@ func (ws *WebSocketClient) SubscribeAllMids(handler SubscriptionHandler) error {
 
 // SubscribeUserEvents subscribes to user events for a specific user
 func (ws *WebSocketClient) SubscribeUserEvents(user string, handler SubscriptionHandler) error {
-	channel := "userEvents"
+	channel := fmt.Sprintf("userEvents:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -533,9 +677,9 @@ func (ws *WebSocketClient) SubscribeUserEvents(user string, handler Subscription
 	return ws.subscribe("userEvents", map[string]interface{}{"user": user})
 }
 
-// SubscribeUserFundings subscribes to user funding updates for a specific user
+// SubscribeUserFundings subscribes to user fundings for a specific user
 func (ws *WebSocketClient) SubscribeUserFundings(user string, handler SubscriptionHandler) error {
-	channel := "userFundings"
+	channel := fmt.Sprintf("userFundings:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -554,7 +698,7 @@ func (ws *WebSocketClient) SubscribeUserFundings(user string, handler Subscripti
 
 // SubscribeUserNonFundingLedgerUpdates subscribes to user non-funding ledger updates for a specific user
 func (ws *WebSocketClient) SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error {
-	channel := "userNonFundingLedgerUpdates"
+	channel := fmt.Sprintf("userNonFundingLedgerUpdates:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -573,7 +717,7 @@ func (ws *WebSocketClient) SubscribeUserNonFundingLedgerUpdates(user string, han
 
 // SubscribeUserTwapSliceFills subscribes to user TWAP slice fills for a specific user
 func (ws *WebSocketClient) SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error {
-	channel := "userTwapSliceFills"
+	channel := fmt.Sprintf("userTwapSliceFills:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -592,7 +736,7 @@ func (ws *WebSocketClient) SubscribeUserTwapSliceFills(user string, handler Subs
 
 // SubscribeUserTwapHistory subscribes to user TWAP history for a specific user
 func (ws *WebSocketClient) SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error {
-	channel := "userTwapHistory"
+	channel := fmt.Sprintf("userTwapHistory:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -611,7 +755,7 @@ func (ws *WebSocketClient) SubscribeUserTwapHistory(user string, handler Subscri
 
 // SubscribeActiveAssetCtx subscribes to active asset context for a specific coin
 func (ws *WebSocketClient) SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error {
-	channel := "activeAssetCtx"
+	channel := fmt.Sprintf("activeAssetCtx:%s", coin)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -630,7 +774,7 @@ func (ws *WebSocketClient) SubscribeActiveAssetCtx(coin string, handler Subscrip
 
 // SubscribeActiveAssetData subscribes to active asset data for a specific user and coin
 func (ws *WebSocketClient) SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error {
-	channel := "activeAssetData"
+	channel := fmt.Sprintf("activeAssetData:%s:%s", user, coin)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -652,7 +796,7 @@ func (ws *WebSocketClient) SubscribeActiveAssetData(user string, coin string, ha
 
 // SubscribeBbo subscribes to best bid/offer updates for a specific coin
 func (ws *WebSocketClient) SubscribeBbo(coin string, handler SubscriptionHandler) error {
-	channel := "bbo"
+	channel := fmt.Sprintf("bbo:%s", coin)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -671,7 +815,7 @@ func (ws *WebSocketClient) SubscribeBbo(coin string, handler SubscriptionHandler
 
 // SubscribeCandle subscribes to candle updates for a specific coin and interval
 func (ws *WebSocketClient) SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error {
-	channel := "candle"
+	channel := fmt.Sprintf("candle:%s:%s", coin, interval)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -693,7 +837,7 @@ func (ws *WebSocketClient) SubscribeCandle(coin string, interval string, handler
 
 // SubscribeOrderUpdates subscribes to order updates for a specific user
 func (ws *WebSocketClient) SubscribeOrderUpdates(user string, handler SubscriptionHandler) error {
-	channel := "orderUpdates"
+	channel := fmt.Sprintf("orderUpdates:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -712,7 +856,7 @@ func (ws *WebSocketClient) SubscribeOrderUpdates(user string, handler Subscripti
 
 // SubscribeNotification subscribes to notifications for a specific user
 func (ws *WebSocketClient) SubscribeNotification(user string, handler SubscriptionHandler) error {
-	channel := "notification"
+	channel := fmt.Sprintf("notification:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
@@ -731,7 +875,7 @@ func (ws *WebSocketClient) SubscribeNotification(user string, handler Subscripti
 
 // SubscribeWebData2 subscribes to web data for a specific user
 func (ws *WebSocketClient) SubscribeWebData2(user string, handler SubscriptionHandler) error {
-	channel := "webData2"
+	channel := fmt.Sprintf("webData2:%s", user)
 
 	ws.mu.Lock()
 	ch := make(chan interface{}, 100)
