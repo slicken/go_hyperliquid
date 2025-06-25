@@ -167,9 +167,47 @@ func (ws *WebSocketClient) readMessages() {
 			param := parts[1]
 
 			// Check if this message matches our subscription
-			if (subType == "userFills" && response.Channel == "userFills" && param == response.Data.(map[string]interface{})["user"]) ||
-				(subType == "l2Book" && response.Channel == "l2Book" && param == response.Data.(map[string]interface{})["coin"]) ||
-				(subType == "trades" && response.Channel == "trades" && param == response.Data.(map[string]interface{})["coin"]) {
+			if subType == "userFills" && response.Channel == "userFills" {
+				// For userFills, check if the user matches
+				if userData, ok := response.Data.(map[string]interface{}); ok {
+					if user, exists := userData["user"]; exists && user == param {
+						if ch, exists := ws.subscriptions[channel]; exists {
+							select {
+							case ch <- response.Data:
+								if ws.debug {
+									log.Printf("Sent data to channel: %s", channel)
+								}
+								found = true
+							default:
+								if ws.debug {
+									log.Printf("Channel full, skipping message for: %s", channel)
+								}
+							}
+						}
+					}
+				}
+			} else if subType == "l2Book" && response.Channel == "l2Book" {
+				// For orderbook, check if the coin matches
+				if bookData, ok := response.Data.(map[string]interface{}); ok {
+					if coin, exists := bookData["coin"]; exists && coin == param {
+						if ch, exists := ws.subscriptions[channel]; exists {
+							select {
+							case ch <- response.Data:
+								if ws.debug {
+									log.Printf("Sent data to channel: %s", channel)
+								}
+								found = true
+							default:
+								if ws.debug {
+									log.Printf("Channel full, skipping message for: %s", channel)
+								}
+							}
+						}
+					}
+				}
+			} else if subType == "trades" && response.Channel == "trades" {
+				// For trades, the server should filter by coin, so we just need to match the channel
+				// But we need to handle the data structure safely
 				if ch, exists := ws.subscriptions[channel]; exists {
 					select {
 					case ch <- response.Data:
@@ -235,7 +273,8 @@ func (ws *WebSocketClient) pingHandler() {
 // reconnect attempts to reconnect to the WebSocket server
 func (ws *WebSocketClient) reconnect() {
 	ws.reconnectCount++
-	backoff := time.Duration(ws.reconnectCount) * time.Second
+	// Exponential backoff: 1s, 2s, 4s, 8s, 16s
+	backoff := time.Duration(1<<(ws.reconnectCount-1)) * time.Second
 
 	time.Sleep(backoff)
 
