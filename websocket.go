@@ -199,19 +199,35 @@ func (ws *WebSocketClient) pingHandler() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if ws.IsConnected() {
-			ws.writeMu.Lock()
-			err := ws.conn.WriteMessage(websocket.PingMessage, nil)
-			ws.writeMu.Unlock()
-			if err != nil {
-				if ws.debug {
-					log.Printf("Ping failed: %v", err)
-				}
-				return
-			}
+		// Check if we should still be connected
+		ws.mu.RLock()
+		if !ws.isConnected || ws.manualDisconnect {
+			ws.mu.RUnlock()
+			return
+		}
+		conn := ws.conn
+		ws.mu.RUnlock()
+
+		if conn == nil {
+			return
+		}
+
+		ws.writeMu.Lock()
+		err := conn.WriteMessage(websocket.PingMessage, nil)
+		ws.writeMu.Unlock()
+
+		if err != nil {
 			if ws.debug {
-				log.Printf("Ping sent successfully")
+				log.Printf("Ping failed: %v", err)
 			}
+			// Don't trigger reconnect here - let readMessages handle it
+			// Just close the connection to trigger the readMessages error
+			conn.Close()
+			return
+		}
+
+		if ws.debug {
+			log.Printf("Ping sent successfully")
 		}
 	}
 }
@@ -240,8 +256,12 @@ func (ws *WebSocketClient) reconnect() {
 
 	if err := ws.Connect(); err != nil {
 		log.Printf("Reconnection failed: %v", err)
+		// Don't reset reconnect count on failure
+		return
 	} else {
 		log.Println("Reconnected successfully")
+		// Reset reconnect count on successful connection
+		ws.reconnectCount = 0
 
 		// Resubscribe to all active subscriptions
 		for _, channel := range activeSubs {
