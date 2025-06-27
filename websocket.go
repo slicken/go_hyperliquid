@@ -208,11 +208,17 @@ func (ws *WebSocketClient) readMessages() {
 		var found bool
 		for channel := range ws.subscriptions {
 			parts := strings.Split(channel, ":")
-			if len(parts) != 2 {
+			if len(parts) < 2 {
 				continue
 			}
 			subType := parts[0]
 			param := parts[1]
+
+			// For channels with more than 2 parts (like candle:BTC:1m),
+			// reconstruct the param to include all remaining parts
+			if len(parts) > 2 {
+				param = strings.Join(parts[1:], ":")
+			}
 
 			if ws.debug {
 				log.Printf("Checking subscription: %s (type: %s, param: %s) against channel: %s", channel, subType, param, response.Channel)
@@ -315,13 +321,15 @@ func (ws *WebSocketClient) readMessages() {
 				}
 			} else if subType == "candle" && response.Channel == "candle" {
 				// For candle, check if the coin and interval match
+				// Channel format is "candle:BTC:1m", so param is "BTC:1m"
 				parts := strings.Split(param, ":")
 				if len(parts) == 2 {
 					coinParam := parts[0]
 					intervalParam := parts[1]
 					if dataMap, ok := response.Data.(map[string]interface{}); ok {
-						if coin, exists := dataMap["coin"]; exists && coin == coinParam {
-							if interval, exists := dataMap["interval"]; exists && interval == intervalParam {
+						// Check for 's' field (symbol/coin) and 'i' field (interval)
+						if coin, exists := dataMap["s"]; exists && coin == coinParam {
+							if interval, exists := dataMap["i"]; exists && interval == intervalParam {
 								matches = true
 							}
 						}
