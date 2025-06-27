@@ -434,85 +434,141 @@ func (ws *WebSocketClient) reconnect() {
 		// Resubscribe to all active subscriptions
 		for _, channel := range activeSubs {
 			parts := strings.Split(channel, ":")
-			if len(parts) != 2 {
-				continue
-			}
 
-			subType := parts[0]
-			param := parts[1]
+			// Handle different channel formats
+			if len(parts) == 2 {
+				subType := parts[0]
+				param := parts[1]
 
-			switch subType {
-			case "userFills":
-				msg := map[string]interface{}{
-					"method": "subscribe",
-					"subscription": map[string]interface{}{
-						"type": "userFills",
-						"user": param,
-					},
+				switch subType {
+				case "userFills":
+					msg := map[string]interface{}{
+						"method": "subscribe",
+						"subscription": map[string]interface{}{
+							"type": "userFills",
+							"user": param,
+						},
+					}
+
+					b, err := json.Marshal(msg)
+					if err != nil {
+						log.Printf("Failed to marshal resubscription message: %v", err)
+						continue
+					}
+
+					ws.writeMu.Lock()
+					err = ws.conn.WriteMessage(websocket.TextMessage, b)
+					ws.writeMu.Unlock()
+
+					if err != nil {
+						log.Printf("Failed to send resubscription message: %v", err)
+					} else {
+						log.Printf("Resubscribed to user fills for user: %s", param)
+					}
+				case "l2Book":
+					msg := map[string]interface{}{
+						"method": "subscribe",
+						"subscription": map[string]interface{}{
+							"type": "l2Book",
+							"coin": param,
+						},
+					}
+
+					b, err := json.Marshal(msg)
+					if err != nil {
+						log.Printf("Failed to marshal resubscription message: %v", err)
+						continue
+					}
+
+					ws.writeMu.Lock()
+					err = ws.conn.WriteMessage(websocket.TextMessage, b)
+					ws.writeMu.Unlock()
+
+					if err != nil {
+						log.Printf("Failed to send resubscription message: %v", err)
+					} else {
+						log.Printf("Resubscribed to orderbook for coin: %s", param)
+					}
+				case "trades":
+					msg := map[string]interface{}{
+						"method": "subscribe",
+						"subscription": map[string]interface{}{
+							"type": "trades",
+							"coin": param,
+						},
+					}
+
+					b, err := json.Marshal(msg)
+					if err != nil {
+						log.Printf("Failed to marshal resubscription message: %v", err)
+						continue
+					}
+
+					ws.writeMu.Lock()
+					err = ws.conn.WriteMessage(websocket.TextMessage, b)
+					ws.writeMu.Unlock()
+
+					if err != nil {
+						log.Printf("Failed to send resubscription message: %v", err)
+					} else {
+						log.Printf("Resubscribed to trades for coin: %s", param)
+					}
+				case "orderUpdates":
+					msg := map[string]interface{}{
+						"method": "subscribe",
+						"subscription": map[string]interface{}{
+							"type": "orderUpdates",
+							"user": param,
+						},
+					}
+
+					b, err := json.Marshal(msg)
+					if err != nil {
+						log.Printf("Failed to marshal resubscription message: %v", err)
+						continue
+					}
+
+					ws.writeMu.Lock()
+					err = ws.conn.WriteMessage(websocket.TextMessage, b)
+					ws.writeMu.Unlock()
+
+					if err != nil {
+						log.Printf("Failed to send resubscription message: %v", err)
+					} else {
+						log.Printf("Resubscribed to order updates for user: %s", param)
+					}
 				}
+			} else if len(parts) == 3 {
+				subType := parts[0]
+				param1 := parts[1]
+				param2 := parts[2]
 
-				b, err := json.Marshal(msg)
-				if err != nil {
-					log.Printf("Failed to marshal resubscription message: %v", err)
-					continue
-				}
+				switch subType {
+				case "candle":
+					msg := map[string]interface{}{
+						"method": "subscribe",
+						"subscription": map[string]interface{}{
+							"type":     "candle",
+							"coin":     param1,
+							"interval": param2,
+						},
+					}
 
-				ws.writeMu.Lock()
-				err = ws.conn.WriteMessage(websocket.TextMessage, b)
-				ws.writeMu.Unlock()
+					b, err := json.Marshal(msg)
+					if err != nil {
+						log.Printf("Failed to marshal resubscription message: %v", err)
+						continue
+					}
 
-				if err != nil {
-					log.Printf("Failed to send resubscription message: %v", err)
-				} else {
-					log.Printf("Resubscribed to user fills for user: %s", param)
-				}
-			case "l2Book":
-				msg := map[string]interface{}{
-					"method": "subscribe",
-					"subscription": map[string]interface{}{
-						"type": "l2Book",
-						"coin": param,
-					},
-				}
+					ws.writeMu.Lock()
+					err = ws.conn.WriteMessage(websocket.TextMessage, b)
+					ws.writeMu.Unlock()
 
-				b, err := json.Marshal(msg)
-				if err != nil {
-					log.Printf("Failed to marshal resubscription message: %v", err)
-					continue
-				}
-
-				ws.writeMu.Lock()
-				err = ws.conn.WriteMessage(websocket.TextMessage, b)
-				ws.writeMu.Unlock()
-
-				if err != nil {
-					log.Printf("Failed to send resubscription message: %v", err)
-				} else {
-					log.Printf("Resubscribed to orderbook for coin: %s", param)
-				}
-			case "trades":
-				msg := map[string]interface{}{
-					"method": "subscribe",
-					"subscription": map[string]interface{}{
-						"type": "trades",
-						"coin": param,
-					},
-				}
-
-				b, err := json.Marshal(msg)
-				if err != nil {
-					log.Printf("Failed to marshal resubscription message: %v", err)
-					continue
-				}
-
-				ws.writeMu.Lock()
-				err = ws.conn.WriteMessage(websocket.TextMessage, b)
-				ws.writeMu.Unlock()
-
-				if err != nil {
-					log.Printf("Failed to send resubscription message: %v", err)
-				} else {
-					log.Printf("Resubscribed to trades for coin: %s", param)
+					if err != nil {
+						log.Printf("Failed to send resubscription message: %v", err)
+					} else {
+						log.Printf("Resubscribed to candle for coin: %s, interval: %s", param1, param2)
+					}
 				}
 			}
 		}
