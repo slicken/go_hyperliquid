@@ -19,12 +19,13 @@ type WebSocketClient struct {
 	subscriptions    map[string]chan interface{}
 	activeSubs       []string // Store active subscription channel names
 	mu               sync.RWMutex
-	writeMu          sync.Mutex
 	reconnectCount   int
 	maxReconnects    int
 	isConnected      bool
 	debug            bool
-	manualDisconnect bool // Flag to prevent auto-reconnect on manual disconnect
+	manualDisconnect bool      // Flag to prevent auto-reconnect on manual disconnect
+	latencyMs        int64     // Current latency in milliseconds
+	lastPingTime     time.Time // Timestamp of the last ping sent
 }
 
 // WSSubscription represents a WebSocket subscription request
@@ -169,9 +170,16 @@ func (ws *WebSocketClient) readMessages() {
 
 		// Check if this is a pong response to our ping
 		if response.Channel == "pong" {
-			if ws.debug {
-				log.Printf("Received pong response")
+			// Calculate latency: timestamp_pong_received - timestamp_ping_sent
+			ws.mu.Lock()
+			if !ws.lastPingTime.IsZero() {
+				latency := time.Since(ws.lastPingTime).Milliseconds()
+				ws.latencyMs = latency
+				if ws.debug {
+					log.Printf("Received pong response, latency: %dms", latency)
+				}
 			}
+			ws.mu.Unlock()
 			continue
 		}
 
@@ -395,9 +403,9 @@ func (ws *WebSocketClient) pingHandler() {
 				continue
 			}
 
-			ws.writeMu.Lock()
+			ws.mu.Lock()
 			err = ws.conn.WriteMessage(websocket.TextMessage, b)
-			ws.writeMu.Unlock()
+			ws.mu.Unlock()
 
 			if err != nil {
 				if ws.debug {
@@ -405,6 +413,12 @@ func (ws *WebSocketClient) pingHandler() {
 				}
 				return
 			}
+
+			// Record the timestamp when ping was sent
+			ws.mu.Lock()
+			ws.lastPingTime = time.Now()
+			ws.mu.Unlock()
+
 			if ws.debug {
 				log.Printf("Ping sent successfully")
 			}
@@ -464,14 +478,12 @@ func (ws *WebSocketClient) reconnect() {
 						continue
 					}
 
-					ws.writeMu.Lock()
+					ws.mu.Lock()
 					err = ws.conn.WriteMessage(websocket.TextMessage, b)
-					ws.writeMu.Unlock()
+					ws.mu.Unlock()
 
 					if err != nil {
 						log.Printf("Failed to send resubscription message: %v", err)
-					} else {
-						log.Printf("Resubscribed to user fills for user: %s", param)
 					}
 				case "l2Book":
 					msg := map[string]interface{}{
@@ -488,14 +500,12 @@ func (ws *WebSocketClient) reconnect() {
 						continue
 					}
 
-					ws.writeMu.Lock()
+					ws.mu.Lock()
 					err = ws.conn.WriteMessage(websocket.TextMessage, b)
-					ws.writeMu.Unlock()
+					ws.mu.Unlock()
 
 					if err != nil {
 						log.Printf("Failed to send resubscription message: %v", err)
-					} else {
-						log.Printf("Resubscribed to orderbook for coin: %s", param)
 					}
 				case "trades":
 					msg := map[string]interface{}{
@@ -512,14 +522,12 @@ func (ws *WebSocketClient) reconnect() {
 						continue
 					}
 
-					ws.writeMu.Lock()
+					ws.mu.Lock()
 					err = ws.conn.WriteMessage(websocket.TextMessage, b)
-					ws.writeMu.Unlock()
+					ws.mu.Unlock()
 
 					if err != nil {
 						log.Printf("Failed to send resubscription message: %v", err)
-					} else {
-						log.Printf("Resubscribed to trades for coin: %s", param)
 					}
 				case "orderUpdates":
 					msg := map[string]interface{}{
@@ -536,14 +544,12 @@ func (ws *WebSocketClient) reconnect() {
 						continue
 					}
 
-					ws.writeMu.Lock()
+					ws.mu.Lock()
 					err = ws.conn.WriteMessage(websocket.TextMessage, b)
-					ws.writeMu.Unlock()
+					ws.mu.Unlock()
 
 					if err != nil {
 						log.Printf("Failed to send resubscription message: %v", err)
-					} else {
-						log.Printf("Resubscribed to order updates for user: %s", param)
 					}
 				}
 			} else if len(parts) == 3 {
@@ -568,14 +574,12 @@ func (ws *WebSocketClient) reconnect() {
 						continue
 					}
 
-					ws.writeMu.Lock()
+					ws.mu.Lock()
 					err = ws.conn.WriteMessage(websocket.TextMessage, b)
-					ws.writeMu.Unlock()
+					ws.mu.Unlock()
 
 					if err != nil {
 						log.Printf("Failed to send resubscription message: %v", err)
-					} else {
-						log.Printf("Resubscribed to candle for coin: %s, interval: %s", param1, param2)
 					}
 				}
 			}
@@ -614,9 +618,9 @@ func (ws *WebSocketClient) subscribe(subType string, params map[string]interface
 		log.Printf("Sending subscription message (format 1): %s", string(b))
 	}
 
-	ws.writeMu.Lock()
+	ws.mu.Lock()
 	err = ws.conn.WriteMessage(websocket.TextMessage, b)
-	ws.writeMu.Unlock()
+	ws.mu.Unlock()
 
 	if err != nil {
 		return err
@@ -697,9 +701,9 @@ func (ws *WebSocketClient) SubscribeUserFills(user string, handler SubscriptionH
 		return err
 	}
 
-	ws.writeMu.Lock()
+	ws.mu.Lock()
 	err = ws.conn.WriteMessage(websocket.TextMessage, b)
-	ws.writeMu.Unlock()
+	ws.mu.Unlock()
 
 	return err
 }
@@ -954,4 +958,11 @@ func (ws *WebSocketClient) SubscribeWebData2(user string, handler SubscriptionHa
 	}()
 
 	return ws.subscribe("webData2", map[string]interface{}{"user": user})
+}
+
+// GetLatency returns the current latency in milliseconds
+func (ws *WebSocketClient) GetLatency() int64 {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	return ws.latencyMs
 }

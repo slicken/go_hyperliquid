@@ -87,7 +87,8 @@ func (client *Client) debug(format string, v ...interface{}) {
 
 // SetPrivateKey sets the private key for the client.
 func (client *Client) SetPrivateKey(privateKey string) error {
-	if strings.HasPrefix(privateKey, "0x") {
+	switch {
+	case strings.HasPrefix(privateKey, "0x"):
 		privateKey = strings.TrimPrefix(privateKey, "0x") // remove 0x prefix from private key
 	}
 	client.privateKey = privateKey

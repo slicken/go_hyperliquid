@@ -5,6 +5,40 @@ import (
 	"time"
 )
 
+func TestLatencyMeasurement(t *testing.T) {
+	// Create a new WebSocket client
+	ws := NewWebSocketClient(true)
+
+	// Initially, latency should be 0
+	latency := ws.GetLatency()
+	if latency != 0 {
+		t.Errorf("Expected initial latency to be 0, got %d", latency)
+	}
+
+	// Set a mock ping time
+	ws.mu.Lock()
+	ws.lastPingTime = time.Now().Add(-50 * time.Millisecond) // 50ms ago
+	ws.mu.Unlock()
+
+	// Simulate receiving a pong response
+	// This would normally happen in the readMessages goroutine
+	ws.mu.Lock()
+	latency = time.Since(ws.lastPingTime).Milliseconds()
+	ws.latencyMs = latency
+	ws.mu.Unlock()
+
+	// Check that latency is now set
+	latency = ws.GetLatency()
+	if latency <= 0 {
+		t.Errorf("Expected latency to be > 0 after pong, got %d", latency)
+	}
+
+	// Latency should be around 50ms (with some tolerance for test execution time)
+	if latency < 40 || latency > 100 {
+		t.Errorf("Expected latency to be around 50ms, got %d", latency)
+	}
+}
+
 func TestWebSocket_ConnectAndSubscribe(t *testing.T) {
 	hl := GetHyperliquidAPI()
 	if hl == nil {

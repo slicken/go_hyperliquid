@@ -21,12 +21,13 @@ type IHyperliquid interface {
 	SubscribeOrderUpdates(user string, handler SubscriptionHandler) error
 	SubscribeNotification(user string, handler SubscriptionHandler) error
 	SubscribeWebData2(user string, handler SubscriptionHandler) error
+	GetLatency() int64
 }
 
 type Hyperliquid struct {
-	ExchangeAPI
-	InfoAPI
-	WebSocket *WebSocketClient
+	*ExchangeAPI
+	*InfoAPI
+	*WebSocketClient
 }
 
 // HyperliquidClientConfig is a configuration struct for Hyperliquid API.
@@ -57,9 +58,9 @@ func NewHyperliquid(config *HyperliquidClientConfig) *Hyperliquid {
 	infoAPI.SetAccountAddress(defaultConfig.AccountAddress)
 	webSocket := NewWebSocketClient(defaultConfig.IsMainnet)
 	return &Hyperliquid{
-		ExchangeAPI: *exchangeAPI,
-		InfoAPI:     *infoAPI,
-		WebSocket:   webSocket,
+		ExchangeAPI:     exchangeAPI,
+		InfoAPI:         infoAPI,
+		WebSocketClient: webSocket,
 	}
 }
 
@@ -86,73 +87,78 @@ func (h *Hyperliquid) IsMainnet() bool {
 
 // WebSocket methods
 func (h *Hyperliquid) ConnectWebSocket() error {
-	return h.WebSocket.Connect()
+	return h.WebSocketClient.Connect()
 }
 
 func (h *Hyperliquid) DisconnectWebSocket() error {
-	return h.WebSocket.Disconnect()
+	return h.WebSocketClient.Disconnect()
 }
 
 func (h *Hyperliquid) SubscribeOrderbook(coin string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeOrderbook(coin, handler)
+	return h.WebSocketClient.SubscribeOrderbook(coin, handler)
 }
 
 func (h *Hyperliquid) SubscribeTrades(coin string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeTrades(coin, handler)
+	return h.WebSocketClient.SubscribeTrades(coin, handler)
 }
 
 func (h *Hyperliquid) SubscribeUserFills(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeUserFills(user, handler)
+	return h.WebSocketClient.SubscribeUserFills(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeAllMids(handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeAllMids(handler)
+	return h.WebSocketClient.SubscribeAllMids(handler)
 }
 
 func (h *Hyperliquid) SubscribeUserEvents(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeUserEvents(user, handler)
+	return h.WebSocketClient.SubscribeUserEvents(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeUserFundings(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeUserFundings(user, handler)
+	return h.WebSocketClient.SubscribeUserFundings(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeUserNonFundingLedgerUpdates(user, handler)
+	return h.WebSocketClient.SubscribeUserNonFundingLedgerUpdates(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeUserTwapSliceFills(user, handler)
+	return h.WebSocketClient.SubscribeUserTwapSliceFills(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeUserTwapHistory(user, handler)
+	return h.WebSocketClient.SubscribeUserTwapHistory(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeActiveAssetCtx(coin, handler)
+	return h.WebSocketClient.SubscribeActiveAssetCtx(coin, handler)
 }
 
 func (h *Hyperliquid) SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeActiveAssetData(user, coin, handler)
+	return h.WebSocketClient.SubscribeActiveAssetData(user, coin, handler)
 }
 
 func (h *Hyperliquid) SubscribeBbo(coin string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeBbo(coin, handler)
+	return h.WebSocketClient.SubscribeBbo(coin, handler)
 }
 
 func (h *Hyperliquid) SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeCandle(coin, interval, handler)
+	return h.WebSocketClient.SubscribeCandle(coin, interval, handler)
 }
 
 func (h *Hyperliquid) SubscribeOrderUpdates(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeOrderUpdates(user, handler)
+	return h.WebSocketClient.SubscribeOrderUpdates(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeNotification(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeNotification(user, handler)
+	return h.WebSocketClient.SubscribeNotification(user, handler)
 }
 
 func (h *Hyperliquid) SubscribeWebData2(user string, handler SubscriptionHandler) error {
-	return h.WebSocket.SubscribeWebData2(user, handler)
+	return h.WebSocketClient.SubscribeWebData2(user, handler)
+}
+
+// GetLatency returns the current WebSocket latency in milliseconds
+func (h *Hyperliquid) GetLatency() int64 {
+	return h.WebSocketClient.GetLatency()
 }
