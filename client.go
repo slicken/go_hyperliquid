@@ -20,9 +20,9 @@ import (
 // SetPrivateKey method sets the private key for the client.
 type IClient interface {
 	IAPIService
-	SetPrivateKey(privateKey string) error
-	SetAccountAddress(address string)
-	AccountAddress() string
+	// SetPrivateKey(privateKey string) error
+	// SetAccountAddress(address string)
+	// AccountAddress() string
 	Debug(status bool)
 	IsMainnet() bool
 }
@@ -33,14 +33,15 @@ type IClient interface {
 // the network type, the private key, and the logger.
 // The debug method prints the debug messages.
 type Client struct {
-	baseUrl        string       // Base URL of the HyperLiquid API
-	privateKey     string       // Private key for the client
-	defualtAddress string       // Default address for the client
-	isMainnet      bool         // Network type
-	Debug          bool         // Debug mode
-	httpClient     *http.Client // HTTP client
-	keyManager     *PKeyManager // Private key manager
-	Logger         *log.Logger  // Logger for debug messages
+	baseUrl        string        // Base URL of the HyperLiquid API
+	privateKey     string        // Private key for the client
+	defaultAddress string        // Default address for the client
+	isMainnet      bool          // Network type
+	Debug          bool          // Debug mode
+	httpClient     *http.Client  // HTTP client
+	keyManager     *PKeyManager  // Private key manager
+	Logger         *log.Logger   // Logger for debug messages
+	webSocketAPI   *WebSocketAPI // WebSocket API for automatic fallback
 }
 
 // Returns the private key manager connected to the API.
@@ -72,7 +73,7 @@ func NewClient(isMainnet bool) *Client {
 		Debug:          false,
 		isMainnet:      isMainnet,
 		privateKey:     "",
-		defualtAddress: "",
+		defaultAddress: "",
 		Logger:         logger,
 		keyManager:     nil,
 	}
@@ -101,12 +102,12 @@ func (client *Client) SetPrivateKey(privateKey string) error {
 // In case you use PKeyManager from API section https://app.hyperliquid.xyz/API
 // Then you can use this method to set the address.
 func (client *Client) SetAccountAddress(address string) {
-	client.defualtAddress = address
+	client.defaultAddress = address
 }
 
 // Returns the public address connected to the API.
 func (client *Client) AccountAddress() string {
-	return client.defualtAddress
+	return client.defaultAddress
 }
 
 // IsMainnet returns true if the client is connected to the mainnet.
@@ -119,8 +120,125 @@ func (client *Client) SetDebug(status bool) {
 	client.Debug = status
 }
 
+// SetWebSocketAPI sets the WebSocket API reference for automatic fallback
+func (client *Client) SetWebSocketAPI(wsAPI *WebSocketAPI) {
+	client.webSocketAPI = wsAPI
+}
+
 // Request sends a POST request to the HyperLiquid API.
+// If WebSocket is connected, it will use WebSocket instead of HTTP.
 func (client *Client) Request(endpoint string, payload any) ([]byte, error) {
+	// Try WebSocket first if connected
+	if client.webSocketAPI != nil && client.webSocketAPI.IsConnected() {
+		client.debug("WebSocket connected, checking if endpoint supports WebSocket...")
+		return client.requestViaWebSocket(endpoint, payload)
+	}
+
+	// Fallback to HTTP
+	client.debug("Using HTTP for request to %s (WebSocket not connected or not supported)", endpoint)
+	return client.requestViaHTTP(endpoint, payload)
+}
+
+// requestViaWebSocket sends a request via WebSocket
+func (client *Client) requestViaWebSocket(endpoint string, payload any) ([]byte, error) {
+	// Clean endpoint by removing leading slash
+	cleanEndpoint := strings.TrimPrefix(endpoint, "/")
+
+	// Use WebSocket for info requests
+	if cleanEndpoint == "info" {
+		client.debug("Using WebSocket for info request")
+		response, err := client.webSocketAPI.PostRequest("info", payload)
+		if err != nil {
+			return nil, err
+		}
+
+		// The WebSocket response has a nested structure:
+		// response.Response.Payload contains the actual API response
+		// We need to extract the data from the nested structure
+		if payloadMap, ok := response.Response.Payload.(map[string]interface{}); ok {
+			if data, exists := payloadMap["data"]; exists {
+				// Return the data directly
+				responseBytes, err := json.Marshal(data)
+				if err != nil {
+					return nil, err
+				}
+				return responseBytes, nil
+			}
+		}
+
+		// Fallback: convert response to bytes as before
+		responseBytes, err := json.Marshal(response.Response.Payload)
+		if err != nil {
+			return nil, err
+		}
+
+		return responseBytes, nil
+	}
+
+	// Use WebSocket for exchange requests (orders, cancels, modifies)
+	if cleanEndpoint == "exchange" {
+		client.debug("Using WebSocket for exchange request")
+
+		// Handle ExchangeRequest struct
+		exchangeReq, ok := payload.(ExchangeRequest)
+		if !ok {
+			client.debug("Invalid payload format for WebSocket exchange request")
+			return client.requestViaHTTP(endpoint, payload)
+		}
+
+		client.debug("Sending via WebSocket - Action: %+v", exchangeReq.Action)
+		client.debug("Sending via WebSocket - Nonce: %d", exchangeReq.Nonce)
+		client.debug("Sending via WebSocket - Signature: %+v", exchangeReq.Signature)
+
+		// Send via WebSocket
+		response, err := client.webSocketAPI.PostOrderRequest(exchangeReq.Action, exchangeReq.Nonce, exchangeReq.Signature, exchangeReq.VaultAddress)
+		if err != nil {
+			client.debug("WebSocket exchange request failed: %v", err)
+			return client.requestViaHTTP(endpoint, payload)
+		}
+
+		client.debug("WebSocket response received: %+v", response)
+
+		// The WebSocket response has a nested structure:
+		// response.Response.Payload contains the actual API response
+		// We need to extract the nested response from the payload
+		if payloadMap, ok := response.Response.Payload.(map[string]interface{}); ok {
+			if nestedResponse, exists := payloadMap["response"]; exists {
+				// The nested response is the actual API response
+				// We need to wrap it in the expected OrderResponse format
+				wrappedResponse := map[string]interface{}{
+					"status":   "ok",
+					"response": nestedResponse,
+				}
+
+				// Return the wrapped response
+				responseBytes, err := json.Marshal(wrappedResponse)
+				if err != nil {
+					return nil, err
+				}
+				client.debug("WebSocket wrapped response bytes: %s", string(responseBytes))
+				return responseBytes, nil
+			}
+		}
+
+		// Fallback: convert response to bytes as before
+		responseBytes, err := json.Marshal(response.Response.Payload)
+		if err != nil {
+			return nil, err
+		}
+
+		client.debug("WebSocket response bytes: %s", string(responseBytes))
+		return responseBytes, nil
+	}
+
+	// Fallback to HTTP for unsupported endpoints
+	client.debug("WebSocket not supported for %s endpoint, falling back to HTTP", endpoint)
+	return client.requestViaHTTP(endpoint, payload)
+}
+
+// requestViaHTTP sends a request via HTTP (original implementation)
+func (client *Client) requestViaHTTP(endpoint string, payload any) ([]byte, error) {
+	client.debug("Using HTTP for %s request", endpoint)
 	endpoint = strings.TrimPrefix(endpoint, "/") // Remove leading slash if present
 	url := fmt.Sprintf("%s/%s", client.baseUrl, endpoint)
 	client.debug("Request to %s", url)

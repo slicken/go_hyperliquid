@@ -6,12 +6,12 @@ import (
 )
 
 func GetEmptyExchangeAPI() *ExchangeAPI {
-	exchangeAPI := NewExchangeAPI(true)
+	exchangeAPI := NewExchangeAPI(true, "", "")
 	return exchangeAPI
 }
 
-func TestExchangeAPI_BuildOrder(t *testing.T) {
-	exchangeAPI := GetEmptyExchangeAPI()
+func TestBuildOrderEIP712(t *testing.T) {
+	exchangeAPI := NewExchangeAPI(true, "", "")
 	// input params
 	coin := "ETH"
 	size := 0.1

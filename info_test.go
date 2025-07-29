@@ -6,14 +6,13 @@ import (
 )
 
 func GetInfoAPI() *InfoAPI {
-	api := NewInfoAPI(false)
 	// It should be active account to pass all tests
 	// like GetAccountFills, GetAccountWithdrawals, etc.
 	TEST_ADDRESS := os.Getenv("TEST_ADDRESS")
 	if TEST_ADDRESS == "" {
 		panic("Set TEST_ADDRESS in .env file")
 	}
-	api.SetAccountAddress(TEST_ADDRESS)
+	api := NewInfoAPI(false, TEST_ADDRESS, "")
 	return api
 }
 

@@ -7,25 +7,60 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// WebSocketClient handles WebSocket connections and subscriptions
-type WebSocketClient struct {
+// IWebSocketAPI is the interface for WebSocket operations
+type IWebSocketAPI interface {
+	Connect() error
+	Disconnect() error
+	IsConnected() bool
+	SetDebug(status bool)
+	GetLatency() int64
+
+	// Subscription methods
+	SubscribeOrderbook(coin string, handler SubscriptionHandler) error
+	SubscribeTrades(coin string, handler SubscriptionHandler) error
+	SubscribeUserFills(user string, handler SubscriptionHandler) error
+	SubscribeAllMids(handler SubscriptionHandler) error
+	SubscribeUserEvents(user string, handler SubscriptionHandler) error
+	SubscribeUserFundings(user string, handler SubscriptionHandler) error
+	SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error
+	SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error
+	SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error
+	SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error
+	SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error
+	SubscribeBbo(coin string, handler SubscriptionHandler) error
+	SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error
+	SubscribeOrderUpdates(user string, handler SubscriptionHandler) error
+	SubscribeNotification(user string, handler SubscriptionHandler) error
+	SubscribeWebData2(user string, handler SubscriptionHandler) error
+
+	// Post request methods
+	PostRequest(requestType string, payload interface{}) (*WSPostResponseData, error)
+	PostInfoRequest(payload interface{}) (*WSPostResponseData, error)
+	PostActionRequest(payload interface{}) (*WSPostResponseData, error)
+	PostOrderRequest(action interface{}, nonce uint64, signature RsvSignature, vaultAddress *string) (*WSPostResponseData, error)
+}
+
+type WebSocketAPI struct {
 	conn             *websocket.Conn
 	url              string
 	subscriptions    map[string]chan interface{}
-	activeSubs       []string // Store active subscription channel names
+	activeSubs       []string                        // Store active subscription channel names
+	postResponses    map[int]chan WSPostResponseData // Store post response channels by ID
 	mu               sync.RWMutex
 	reconnectCount   int
 	maxReconnects    int
 	isConnected      bool
 	debug            bool
-	manualDisconnect bool      // Flag to prevent auto-reconnect on manual disconnect
-	latencyMs        int64     // Current latency in milliseconds
-	lastPingTime     time.Time // Timestamp of the last ping sent
+	manualDisconnect bool         // Flag to prevent auto-reconnect on manual disconnect
+	latencyMs        int64        // Current latency in milliseconds
+	lastPingTime     time.Time    // Timestamp of the last ping sent
+	nextPostID       atomic.Int64 // Next post request ID
 }
 
 // WSSubscription represents a WebSocket subscription request
@@ -43,23 +78,59 @@ type WSResponse struct {
 // SubscriptionHandler is a function type for handling subscription data
 type SubscriptionHandler func(data interface{})
 
-// NewWebSocketClient creates a new WebSocket client
-func NewWebSocketClient(isMainnet bool) *WebSocketClient {
+// WSPostRequest represents a WebSocket post request
+type WSPostRequest struct {
+	Method  string     `json:"method"`
+	ID      int        `json:"id"`
+	Request WSPostData `json:"request"`
+}
+
+// WSPostData represents the data part of a post request
+type WSPostData struct {
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
+}
+
+// WSPostResponse represents a WebSocket post response
+type WSPostResponse struct {
+	Channel string             `json:"channel"`
+	Data    WSPostResponseData `json:"data"`
+}
+
+// WSPostResponseData represents the data part of a post response
+type WSPostResponseData struct {
+	ID       int                `json:"id"`
+	Response WSPostResponseBody `json:"response"`
+}
+
+// WSPostResponseBody represents the response body of a post response
+type WSPostResponseBody struct {
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
+}
+
+// PostResponseHandler is a function type for handling post response data
+type PostResponseHandler func(response WSPostResponseData)
+
+func NewWebSocketAPI(isMainnet bool) *WebSocketAPI {
 	wsURL := MainnetWSURL
 	if !isMainnet {
 		wsURL = TestnetWSURL
 	}
-
-	return &WebSocketClient{
+	client := &WebSocketAPI{
 		url:           wsURL,
 		subscriptions: make(map[string]chan interface{}),
 		activeSubs:    make([]string, 0),
+		postResponses: make(map[int]chan WSPostResponseData),
 		maxReconnects: 5,
+		nextPostID:    atomic.Int64{},
 	}
+	client.nextPostID.Store(1)
+	return client
 }
 
 // Connect establishes a WebSocket connection
-func (ws *WebSocketClient) Connect() error {
+func (ws *WebSocketAPI) Connect() error {
 	u, err := url.Parse(ws.url)
 	if err != nil {
 		return fmt.Errorf("failed to parse WebSocket URL: %w", err)
@@ -90,7 +161,7 @@ func (ws *WebSocketClient) Connect() error {
 }
 
 // Disconnect closes the WebSocket connection and prevents auto-reconnect
-func (ws *WebSocketClient) Disconnect() error {
+func (ws *WebSocketAPI) Disconnect() error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
@@ -104,19 +175,19 @@ func (ws *WebSocketClient) Disconnect() error {
 }
 
 // IsConnected returns the connection status
-func (ws *WebSocketClient) IsConnected() bool {
+func (ws *WebSocketAPI) IsConnected() bool {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
 	return ws.isConnected
 }
 
 // SetDebugActive enables debug mode
-func (ws *WebSocketClient) SetDebug(status bool) {
+func (ws *WebSocketAPI) SetDebug(status bool) {
 	ws.debug = status
 }
 
 // readMessages reads messages from the WebSocket connection
-func (ws *WebSocketClient) readMessages() {
+func (ws *WebSocketAPI) readMessages() {
 	defer func() {
 		ws.mu.Lock()
 		ws.isConnected = false
@@ -180,6 +251,33 @@ func (ws *WebSocketClient) readMessages() {
 				}
 			}
 			ws.mu.Unlock()
+			continue
+		}
+
+		// Check if this is a post response
+		if response.Channel == "post" {
+			var postResponse WSPostResponse
+			if err := json.Unmarshal(message, &postResponse); err != nil {
+				if ws.debug {
+					log.Printf("Failed to unmarshal post response: %v", err)
+				}
+				continue
+			}
+
+			ws.mu.RLock()
+			if ch, exists := ws.postResponses[postResponse.Data.ID]; exists {
+				select {
+				case ch <- postResponse.Data:
+					if ws.debug {
+						log.Printf("Sent post response to channel for ID: %d", postResponse.Data.ID)
+					}
+				default:
+					if ws.debug {
+						log.Printf("Post response channel full for ID: %d", postResponse.Data.ID)
+					}
+				}
+			}
+			ws.mu.RUnlock()
 			continue
 		}
 
@@ -382,7 +480,7 @@ func (ws *WebSocketClient) readMessages() {
 }
 
 // pingHandler sends periodic ping messages to keep the connection alive
-func (ws *WebSocketClient) pingHandler() {
+func (ws *WebSocketAPI) pingHandler() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -427,7 +525,7 @@ func (ws *WebSocketClient) pingHandler() {
 }
 
 // reconnect attempts to reconnect to the WebSocket server
-func (ws *WebSocketClient) reconnect() {
+func (ws *WebSocketAPI) reconnect() {
 	ws.reconnectCount++
 	backoff := time.Duration(ws.reconnectCount) * time.Second
 
@@ -588,7 +686,7 @@ func (ws *WebSocketClient) reconnect() {
 }
 
 // subscribe sends a subscription request to the WebSocket server
-func (ws *WebSocketClient) subscribe(subType string, params map[string]interface{}) error {
+func (ws *WebSocketAPI) subscribe(subType string, params map[string]interface{}) error {
 	// Try different subscription message formats
 	var msg map[string]interface{}
 
@@ -634,7 +732,7 @@ func (ws *WebSocketClient) subscribe(subType string, params map[string]interface
 }
 
 // SubscribeOrderbook subscribes to orderbook updates for a specific coin
-func (ws *WebSocketClient) SubscribeOrderbook(coin string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeOrderbook(coin string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("l2Book:%s", coin)
 
 	ws.mu.Lock()
@@ -653,7 +751,7 @@ func (ws *WebSocketClient) SubscribeOrderbook(coin string, handler SubscriptionH
 }
 
 // SubscribeTrades subscribes to trade updates for a specific coin
-func (ws *WebSocketClient) SubscribeTrades(coin string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeTrades(coin string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("trades:%s", coin)
 
 	ws.mu.Lock()
@@ -672,7 +770,7 @@ func (ws *WebSocketClient) SubscribeTrades(coin string, handler SubscriptionHand
 }
 
 // SubscribeUserFills subscribes to user fill updates
-func (ws *WebSocketClient) SubscribeUserFills(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeUserFills(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("userFills:%s", user)
 
 	ws.mu.Lock()
@@ -709,7 +807,7 @@ func (ws *WebSocketClient) SubscribeUserFills(user string, handler SubscriptionH
 }
 
 // SubscribeAllMids subscribes to all mid price updates
-func (ws *WebSocketClient) SubscribeAllMids(handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeAllMids(handler SubscriptionHandler) error {
 	channel := "allMids"
 
 	ws.mu.Lock()
@@ -727,7 +825,7 @@ func (ws *WebSocketClient) SubscribeAllMids(handler SubscriptionHandler) error {
 }
 
 // SubscribeUserEvents subscribes to user events for a specific user
-func (ws *WebSocketClient) SubscribeUserEvents(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeUserEvents(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("userEvents:%s", user)
 
 	ws.mu.Lock()
@@ -746,7 +844,7 @@ func (ws *WebSocketClient) SubscribeUserEvents(user string, handler Subscription
 }
 
 // SubscribeUserFundings subscribes to user fundings for a specific user
-func (ws *WebSocketClient) SubscribeUserFundings(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeUserFundings(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("userFundings:%s", user)
 
 	ws.mu.Lock()
@@ -765,7 +863,7 @@ func (ws *WebSocketClient) SubscribeUserFundings(user string, handler Subscripti
 }
 
 // SubscribeUserNonFundingLedgerUpdates subscribes to user non-funding ledger updates for a specific user
-func (ws *WebSocketClient) SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeUserNonFundingLedgerUpdates(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("userNonFundingLedgerUpdates:%s", user)
 
 	ws.mu.Lock()
@@ -784,7 +882,7 @@ func (ws *WebSocketClient) SubscribeUserNonFundingLedgerUpdates(user string, han
 }
 
 // SubscribeUserTwapSliceFills subscribes to user TWAP slice fills for a specific user
-func (ws *WebSocketClient) SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeUserTwapSliceFills(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("userTwapSliceFills:%s", user)
 
 	ws.mu.Lock()
@@ -803,7 +901,7 @@ func (ws *WebSocketClient) SubscribeUserTwapSliceFills(user string, handler Subs
 }
 
 // SubscribeUserTwapHistory subscribes to user TWAP history for a specific user
-func (ws *WebSocketClient) SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeUserTwapHistory(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("userTwapHistory:%s", user)
 
 	ws.mu.Lock()
@@ -822,7 +920,7 @@ func (ws *WebSocketClient) SubscribeUserTwapHistory(user string, handler Subscri
 }
 
 // SubscribeActiveAssetCtx subscribes to active asset context for a specific coin
-func (ws *WebSocketClient) SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeActiveAssetCtx(coin string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("activeAssetCtx:%s", coin)
 
 	ws.mu.Lock()
@@ -841,7 +939,7 @@ func (ws *WebSocketClient) SubscribeActiveAssetCtx(coin string, handler Subscrip
 }
 
 // SubscribeActiveAssetData subscribes to active asset data for a specific user and coin
-func (ws *WebSocketClient) SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeActiveAssetData(user string, coin string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("activeAssetData:%s:%s", user, coin)
 
 	ws.mu.Lock()
@@ -863,7 +961,7 @@ func (ws *WebSocketClient) SubscribeActiveAssetData(user string, coin string, ha
 }
 
 // SubscribeBbo subscribes to best bid/offer updates for a specific coin
-func (ws *WebSocketClient) SubscribeBbo(coin string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeBbo(coin string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("bbo:%s", coin)
 
 	ws.mu.Lock()
@@ -882,7 +980,7 @@ func (ws *WebSocketClient) SubscribeBbo(coin string, handler SubscriptionHandler
 }
 
 // SubscribeCandle subscribes to candle updates for a specific coin and interval
-func (ws *WebSocketClient) SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeCandle(coin string, interval string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("candle:%s:%s", coin, interval)
 
 	ws.mu.Lock()
@@ -904,7 +1002,7 @@ func (ws *WebSocketClient) SubscribeCandle(coin string, interval string, handler
 }
 
 // SubscribeOrderUpdates subscribes to order updates for a specific user
-func (ws *WebSocketClient) SubscribeOrderUpdates(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeOrderUpdates(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("orderUpdates:%s", user)
 
 	ws.mu.Lock()
@@ -923,7 +1021,7 @@ func (ws *WebSocketClient) SubscribeOrderUpdates(user string, handler Subscripti
 }
 
 // SubscribeNotification subscribes to notifications for a specific user
-func (ws *WebSocketClient) SubscribeNotification(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeNotification(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("notification:%s", user)
 
 	ws.mu.Lock()
@@ -942,7 +1040,7 @@ func (ws *WebSocketClient) SubscribeNotification(user string, handler Subscripti
 }
 
 // SubscribeWebData2 subscribes to web data for a specific user
-func (ws *WebSocketClient) SubscribeWebData2(user string, handler SubscriptionHandler) error {
+func (ws *WebSocketAPI) SubscribeWebData2(user string, handler SubscriptionHandler) error {
 	channel := fmt.Sprintf("webData2:%s", user)
 
 	ws.mu.Lock()
@@ -961,8 +1059,88 @@ func (ws *WebSocketClient) SubscribeWebData2(user string, handler SubscriptionHa
 }
 
 // GetLatency returns the current latency in milliseconds
-func (ws *WebSocketClient) GetLatency() int64 {
+func (ws *WebSocketAPI) GetLatency() int64 {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
 	return ws.latencyMs
+}
+
+// PostRequest sends a post request through WebSocket and returns the response
+func (ws *WebSocketAPI) PostRequest(requestType string, payload interface{}) (*WSPostResponseData, error) {
+	ws.mu.Lock()
+	postID := int(ws.nextPostID.Add(1))
+	ws.mu.Unlock()
+
+	// Create response channel
+	responseCh := make(chan WSPostResponseData, 1)
+	ws.mu.Lock()
+	ws.postResponses[postID] = responseCh
+	ws.mu.Unlock()
+
+	// Clean up response channel after use
+	defer func() {
+		ws.mu.Lock()
+		delete(ws.postResponses, postID)
+		ws.mu.Unlock()
+	}()
+
+	// Create post request
+	postRequest := WSPostRequest{
+		Method: "post",
+		ID:     postID,
+		Request: WSPostData{
+			Type:    requestType,
+			Payload: payload,
+		},
+	}
+
+	// Marshal and send request
+	b, err := json.Marshal(postRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal post request: %w", err)
+	}
+
+	if ws.debug {
+		log.Printf("Sending post request: %s", string(b))
+	}
+
+	ws.mu.Lock()
+	err = ws.conn.WriteMessage(websocket.TextMessage, b)
+	ws.mu.Unlock()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to send post request: %w", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case response := <-responseCh:
+		return &response, nil
+	case <-time.After(30 * time.Second):
+		return nil, fmt.Errorf("post request timeout")
+	}
+}
+
+// PostInfoRequest sends an info request through WebSocket
+func (ws *WebSocketAPI) PostInfoRequest(payload interface{}) (*WSPostResponseData, error) {
+	return ws.PostRequest("info", payload)
+}
+
+// PostActionRequest sends an action request through WebSocket
+func (ws *WebSocketAPI) PostActionRequest(payload interface{}) (*WSPostResponseData, error) {
+	return ws.PostRequest("action", payload)
+}
+
+// PostOrderRequest sends an order request through WebSocket
+func (ws *WebSocketAPI) PostOrderRequest(action interface{}, nonce uint64, signature RsvSignature, vaultAddress *string) (*WSPostResponseData, error) {
+	payload := map[string]interface{}{
+		"action":    action,
+		"nonce":     nonce,
+		"signature": signature,
+	}
+	if vaultAddress != nil {
+		payload["vaultAddress"] = *vaultAddress
+	}
+
+	return ws.PostActionRequest(payload)
 }

@@ -8,8 +8,6 @@ import (
 
 // IInfoAPI is an interface for the /info service.
 type IInfoAPI interface {
-	IClient // Base client interface
-
 	// INFO API ENDPOINTS
 	GetAllMids() (*map[string]string, error)
 	GetOpenOrders(address string) (*[]Order, error)
@@ -35,22 +33,34 @@ type IInfoAPI interface {
 	BuildMetaMap() (map[string]AssetInfo, error)
 	GetWithdrawals(address string) (*[]Withdrawal, error)
 	GetAccountWithdrawals() (*[]Withdrawal, error)
+	GetLatency() int64
 }
 
 type InfoAPI struct {
 	Client
 	baseEndpoint string
 	spotMeta     map[string]AssetInfo
+	webSocketAPI *WebSocketAPI // WebSocket API for automatic fallback
 }
 
 // NewInfoAPI returns a new instance of the InfoAPI struct.
 // It sets the base endpoint to "/info" and the client to the NewClient function.
 // The isMainnet parameter is used to set the network type.
-func NewInfoAPI(isMainnet bool) *InfoAPI {
+// The API automatically handles private key and account address setup.
+func NewInfoAPI(isMainnet bool, accountAddress string, privateKey string) *InfoAPI {
 	api := InfoAPI{
 		baseEndpoint: "/info",
 		Client:       *NewClient(isMainnet),
 	}
+
+	// Set credentials automatically
+	if privateKey != "" {
+		api.SetPrivateKey(privateKey)
+	}
+	if accountAddress != "" {
+		api.SetAccountAddress(accountAddress)
+	}
+
 	spotMeta, err := api.BuildSpotMetaMap()
 	if err != nil {
 		api.debug("Error building meta map: %s", err)
@@ -437,4 +447,10 @@ func (api *InfoAPI) BuildSpotMetaMap() (map[string]AssetInfo, error) {
 		}
 	}
 	return metaMap, nil
+}
+
+// SetWebSocketAPI sets the WebSocket API reference for automatic fallback
+func (api *InfoAPI) SetWebSocketAPI(wsAPI *WebSocketAPI) {
+	api.webSocketAPI = wsAPI
+	api.Client.SetWebSocketAPI(wsAPI)
 }

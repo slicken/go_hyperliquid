@@ -1,5 +1,5 @@
 # go-hyperliquid - fork of "githib.com/Logarithm-Labs/go-hyperliquid/hyperliquid"
-A golang SDK for Hyperliquid API.
+A golang SDK for Hyperliquid API with **automatic WebSocket fallback** for optimal performance.
 
 # API reference
 - [Hyperliquid](https://app.hyperliquid.xyz/)
@@ -43,6 +43,68 @@ func main() {
 }
 ```
 
+## WebSocket Fallback Feature
+
+The SDK includes **automatic WebSocket fallback** that optimizes performance by using the most efficient transport method for each request type:
+
+### How It Works
+
+1. **Info Requests** (meta, account state, etc.): Use WebSocket when connected
+2. **Exchange Requests** (orders, cancels, modifies): Use WebSocket when connected  
+3. **Automatic Fallback**: HTTP if WebSocket fails or is not connected
+4. **Zero Code Changes**: All existing API calls work seamlessly
+
+### Example with WebSocket Fallback
+```go
+package main
+
+import (
+	"log"
+	"os"
+	"strings"
+
+	"github.com/slicken/go_hyperliquid"
+)
+
+func main() {
+	// Initialize client with automatic WebSocket fallback
+	config := &hyperliquid.HyperliquidClientConfig{
+		IsMainnet:      true,
+		AccountAddress: strings.ToLower(os.Getenv("HYPERLIQUID_API_KEY")),    // Main account address
+		PrivateKey:     strings.ToLower(os.Getenv("HYPERLIQUID_API_SECRET")), // API wallet private key
+	}
+	hl := hyperliquid.NewHyperliquid(config)
+
+	// Connect to WebSocket (optional - will auto-fallback to HTTP if not connected)
+	err := hl.WebSocketAPI.Connect()
+	if err != nil {
+		log.Printf("WebSocket connection failed, will use HTTP: %v", err)
+	}
+
+	// These automatically use WebSocket if connected, HTTP if not
+	meta, err := hl.InfoAPI.BuildMetaMap()           // WebSocket for info
+	orderResponse, err := hl.ExchangeAPI.Order(...)  // WebSocket for orders
+	
+	// All existing functions work the same way - no code changes needed!
+}
+```
+
+### Benefits
+
+- **🚀 Faster Info Requests**: WebSocket reduces latency for market data
+- **⚡ Real-time Orders**: WebSocket provides faster order execution
+- **🔄 Automatic Fallback**: HTTP if WebSocket fails
+- **🔧 Zero Code Changes**: All existing API calls work seamlessly
+- **📊 Better Performance**: Optimized transport for each request type
+
+### Transport Selection Logic
+
+| Request Type | When WebSocket Connected | When WebSocket Disconnected |
+|--------------|-------------------------|----------------------------|
+| Info Requests | ✅ WebSocket | ✅ HTTP |
+| Exchange Requests | ✅ WebSocket | ✅ HTTP |
+| WebSocket Subscriptions | ✅ WebSocket 
+
 ## WebSocket Examples
 
 ### Orderbook and Trades
@@ -73,14 +135,14 @@ func main() {
 	}
 
 	// Connect to WebSocket
-	err := hl.ConnectWebSocket()
+	err := hl.WebSocketAPI.Connect()
 	if err != nil {
 		log.Fatal("Failed to connect to WebSocket:", err)
 	}
-	defer hl.DisconnectWebSocket()
+	defer hl.WebSocketAPI.Disconnect()
 
 	// Subscribe to BTC orderbook updates
-	if err := hl.SubscribeOrderbook("BTC", func(data interface{}) {
+	if err := hl.WebSocketAPI.SubscribeOrderbook("BTC", func(data interface{}) {
 		orderbook, ok := data.(map[string]interface{})
 		if !ok {
 			return
@@ -115,7 +177,7 @@ func main() {
 	}
 
 	// Subscribe to BTC trades
-	if err := hl.SubscribeTrades("BTC", func(data interface{}) {
+	if err := hl.WebSocketAPI.SubscribeTrades("BTC", func(data interface{}) {
 		trades, ok := data.([]interface{})
 		if !ok || len(trades) == 0 {
 			return
@@ -167,7 +229,7 @@ func main() {
 	size := 0.01      // Size in BTC
 	slippage := 0.005 // 0.5% slippage
 
-	response, err := hl.MarketOrder(coin, size, &slippage)
+	response, err := hl.ExchangeAPI.MarketOrder(coin, size, &slippage)
 	if err != nil {
 		log.Fatalf("Failed to place order: %v", err)
 	}
@@ -176,7 +238,7 @@ func main() {
 	fmt.Printf("Status: %s\n", response.Status)
 
 	// Get account information
-	accountState, err := hl.GetAccountState()
+	accountState, err := hl.InfoAPI.GetUserState(hl.AccountAddress())
 	if err != nil {
 		log.Printf("Failed to get account state: %v", err)
 	} else {
@@ -190,7 +252,13 @@ func main() {
 
 ## Available Features
 
-### WebSocket
+### WebSocket Fallback
+- **Automatic Transport Selection**: WebSocket for info/exchange requests when connected
+- **Seamless Fallback**: HTTP when WebSocket fails or is disconnected
+- **Zero Code Changes**: All existing API calls work automatically
+- **Performance Optimized**: Fastest transport for each request type
+
+### WebSocket Subscriptions
 - Real-time orderbook updates
 - Real-time trade updates
 - User fill updates
@@ -219,22 +287,22 @@ func main() {
 - Get candle data
 - Get funding rates
 - Get market prices
-- Get asset informationInfoA
+- Get asset information
 
 ## Error Handling
 The SDK includes comprehensive error handling and logging capabilities. Enable debug mode for detailed logs:
 
 ```go
-hl.ExchangeAPI.Debug(bool)
-hl.InfoAPI.Debug(bool)
-hl.Websocket(bool)
+hl.ExchangeAPI.SetDebug(true)
+hl.InfoAPI.SetDebug(true)
+hl.WebSocketAPI.SetDebug(true)
 ```
 
 ## Rate Limiting
 The SDK automatically handles rate limiting according to Hyperliquid's API limits. You can check your current rate limit status:
 
 ```go
-limits, err := hl.GetAccountRateLimits()
+limits, err := hl.InfoAPI.GetAccountRateLimits()
 if err != nil {
     log.Printf("Failed to get rate limits: %v", err)
 } else {

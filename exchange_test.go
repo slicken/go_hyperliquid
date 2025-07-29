@@ -9,14 +9,9 @@ import (
 )
 
 func GetExchangeAPI() *ExchangeAPI {
-	exchangeAPI := NewExchangeAPI(false)
 	TEST_ADDRESS := os.Getenv("TEST_ADDRESS")
 	TEST_PRIVATE_KEY := os.Getenv("TEST_PRIVATE_KEY")
-	err := exchangeAPI.SetPrivateKey(TEST_PRIVATE_KEY)
-	if err != nil {
-		panic(err)
-	}
-	exchangeAPI.SetAccountAddress(TEST_ADDRESS)
+	exchangeAPI := NewExchangeAPI(false, TEST_ADDRESS, TEST_PRIVATE_KEY)
 	return exchangeAPI
 }
 

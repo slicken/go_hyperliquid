@@ -9,8 +9,6 @@ import (
 
 // IExchangeAPI is an interface for the /exchange service.
 type IExchangeAPI interface {
-	IClient
-
 	// Open orders
 	BulkOrders(requests []OrderRequest, grouping Grouping) (*OrderResponse, error)
 	Order(request OrderRequest, grouping Grouping) (*OrderResponse, error)
@@ -34,21 +32,29 @@ type IExchangeAPI interface {
 type ExchangeAPI struct {
 	Client
 	infoAPI      *InfoAPI
-	address      string
 	baseEndpoint string
 	meta         map[string]AssetInfo
 	spotMeta     map[string]AssetInfo
+	webSocketAPI *WebSocketAPI // WebSocket API for automatic fallback
 }
 
 // NewExchangeAPI creates a new default ExchangeAPI.
-// Run SetPrivateKey() and SetAccountAddress() to set the private key and account address.
-func NewExchangeAPI(isMainnet bool) *ExchangeAPI {
+// The API automatically handles private key and account address setup.
+func NewExchangeAPI(isMainnet bool, accountAddress string, privateKey string) *ExchangeAPI {
 	api := ExchangeAPI{
 		Client:       *NewClient(isMainnet),
 		baseEndpoint: "/exchange",
-		infoAPI:      NewInfoAPI(isMainnet),
-		address:      "",
+		infoAPI:      NewInfoAPI(isMainnet, accountAddress, privateKey),
 	}
+
+	// Set credentials automatically
+	if privateKey != "" {
+		api.SetPrivateKey(privateKey)
+	}
+	if accountAddress != "" {
+		api.SetAccountAddress(accountAddress)
+	}
+
 	// turn on debug mode if there is an error with /info service
 	meta, err := api.infoAPI.BuildMetaMap()
 	if err != nil {
@@ -63,6 +69,12 @@ func NewExchangeAPI(isMainnet bool) *ExchangeAPI {
 	api.spotMeta = spotMeta
 
 	return &api
+}
+
+// SetWebSocketAPI sets the WebSocket API reference for automatic fallback
+func (api *ExchangeAPI) SetWebSocketAPI(wsAPI *WebSocketAPI) {
+	api.webSocketAPI = wsAPI
+	api.Client.SetWebSocketAPI(wsAPI)
 }
 
 //
