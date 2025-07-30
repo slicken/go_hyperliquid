@@ -1,7 +1,6 @@
 package hyperliquid
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -143,7 +142,7 @@ type StatusResponse struct {
 func (sr *StatusResponse) UnmarshalJSON(data []byte) error {
 	// Try to unmarshal data as a string.
 	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
+	if err := FastUnmarshal(data, &s); err == nil {
 		sr.Status = s
 		return nil
 	}
@@ -152,7 +151,7 @@ func (sr *StatusResponse) UnmarshalJSON(data []byte) error {
 	// Use an alias to avoid infinite recursion.
 	type Alias StatusResponse
 	var alias Alias
-	if err := json.Unmarshal(data, &alias); err != nil {
+	if err := FastUnmarshal(data, &alias); err != nil {
 		return fmt.Errorf("StatusResponse: unable to unmarshal data as string or object: %w", err)
 	}
 	*sr = StatusResponse(alias)

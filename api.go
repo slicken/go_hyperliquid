@@ -1,7 +1,6 @@
 package hyperliquid
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -46,15 +45,15 @@ func MakeUniversalRequest[T any](api IAPIService, request any) (*T, error) {
 	}
 
 	var result T
-	err = json.Unmarshal(response, &result)
+	err = FastUnmarshal(response, &result)
 	if err == nil {
 		return &result, nil
 	}
 
 	var errResult map[string]interface{}
-	err = json.Unmarshal(response, &errResult)
+	err = FastUnmarshal(response, &errResult)
 	if err != nil {
-		api.debug("Error second json.Unmarshal: %s", err)
+		api.debug("Error second FastUnmarshal: %s", err)
 		return nil, APIError{Message: "Unexpected response"}
 	}
 

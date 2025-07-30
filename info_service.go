@@ -1,7 +1,6 @@
 package hyperliquid
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 )
@@ -100,13 +99,13 @@ func (api *InfoAPI) GetAllSpotPrices() (*map[string]string, error) {
 
 	result := make(map[string]string)
 
-	marketBytes, err := json.Marshal(marketsData)
+	marketBytes, err := FastMarshal(marketsData)
 	if err != nil {
 		return nil, err
 	}
 
 	var markets []Market
-	if err := json.Unmarshal(marketBytes, &markets); err != nil {
+	if err := FastUnmarshal(marketBytes, &markets); err != nil {
 		return nil, err
 	}
 

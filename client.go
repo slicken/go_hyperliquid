@@ -2,7 +2,6 @@ package hyperliquid
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,7 +157,7 @@ func (client *Client) requestViaWebSocket(endpoint string, payload any) ([]byte,
 		if payloadMap, ok := response.Response.Payload.(map[string]interface{}); ok {
 			if data, exists := payloadMap["data"]; exists {
 				// Return the data directly
-				responseBytes, err := json.Marshal(data)
+				responseBytes, err := FastMarshal(data)
 				if err != nil {
 					return nil, err
 				}
@@ -167,7 +166,7 @@ func (client *Client) requestViaWebSocket(endpoint string, payload any) ([]byte,
 		}
 
 		// Fallback: convert response to bytes as before
-		responseBytes, err := json.Marshal(response.Response.Payload)
+		responseBytes, err := FastMarshal(response.Response.Payload)
 		if err != nil {
 			return nil, err
 		}
@@ -212,7 +211,7 @@ func (client *Client) requestViaWebSocket(endpoint string, payload any) ([]byte,
 				}
 
 				// Return the wrapped response
-				responseBytes, err := json.Marshal(wrappedResponse)
+				responseBytes, err := FastMarshal(wrappedResponse)
 				if err != nil {
 					return nil, err
 				}
@@ -222,7 +221,7 @@ func (client *Client) requestViaWebSocket(endpoint string, payload any) ([]byte,
 		}
 
 		// Fallback: convert response to bytes as before
-		responseBytes, err := json.Marshal(response.Response.Payload)
+		responseBytes, err := FastMarshal(response.Response.Payload)
 		if err != nil {
 			return nil, err
 		}
@@ -242,17 +241,12 @@ func (client *Client) requestViaHTTP(endpoint string, payload any) ([]byte, erro
 	endpoint = strings.TrimPrefix(endpoint, "/") // Remove leading slash if present
 	url := fmt.Sprintf("%s/%s", client.baseUrl, endpoint)
 	client.debug("Request to %s", url)
-	jsonPayload, err := json.Marshal(payload)
+	payloadBytes, err := FastMarshal(payload)
 	if err != nil {
-		client.debug("Error json.Marshal: %s", err)
+		client.debug("Error FastMarshal: %s", err)
 		return nil, err
 	}
-	client.debug("Request payload: %s", string(jsonPayload))
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		client.debug("Error json.Marshal: %s", err)
-		return nil, err
-	}
+	client.debug("Request payload: %s", string(payloadBytes))
 	request, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		client.debug("Error http.NewRequest: %s", err)

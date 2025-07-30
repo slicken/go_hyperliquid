@@ -2,7 +2,6 @@ package hyperliquid
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -221,10 +220,10 @@ func SizeToWire(x float64, szDecimals int) string {
 
 // To sign raw messages via EIP-712
 func StructToMap(strct any) (res map[string]interface{}, err error) {
-	a, err := json.Marshal(strct)
+	a, err := FastMarshal(strct)
 	if err != nil {
 		return map[string]interface{}{}, err
 	}
-	json.Unmarshal(a, &res)
+	FastUnmarshal(a, &res)
 	return res, nil
 }
