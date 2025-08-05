@@ -59,13 +59,6 @@ type UserStateSpot struct {
 }
 
 type SpotAssetPosition struct {
-	/*
-			 "coin": "USDC",
-		            "token": 0,
-		            "hold": "0.0",
-		            "total": "14.625485",
-		            "entryNtl": "0.0"
-	*/
 	Coin     string  `json:"coin"`
 	Token    int     `json:"token"`
 	Hold     float64 `json:"hold,string"`

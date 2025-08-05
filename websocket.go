@@ -12,14 +12,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const MAX_RECONNECT = 5
+
 // IWebSocketAPI is the interface for WebSocket operations
 type IWebSocketAPI interface {
 	Connect() error
 	Disconnect() error
-	DisconnectForTesting() error // For testing reconnection without manual disconnect flag
+	DisconnectForTesting() error // For testing reconnection
 	IsConnected() bool
 	SetDebug(status bool)
-	GetLatency() int64
 
 	// Subscription methods
 	SubscribeOrderbook(coin string, handler SubscriptionHandler) error
@@ -105,9 +106,8 @@ type WebSocketAPI struct {
 	postResponses    map[int]chan WSPostResponseData
 	mu               sync.RWMutex
 	reconnectCount   atomic.Int32
-	maxReconnects    int32
 	isConnected      atomic.Bool
-	debug            atomic.Bool
+	Debug            bool
 	manualDisconnect atomic.Bool  // Flag to prevent auto-reconnect on manual disconnect
 	latencyMs        atomic.Int64 // Current latency in milliseconds
 	lastPingTime     atomic.Value // Timestamp of the last ping sent (time.Time)
@@ -190,7 +190,6 @@ func NewWebSocketAPI(isMainnet bool) *WebSocketAPI {
 		subscriptions:    make(map[string]*Subscription),
 		channelHandlers:  make(map[string][]*Subscription),
 		postResponses:    make(map[int]chan WSPostResponseData),
-		maxReconnects:    5,
 		nextPostID:       atomic.Int64{},
 		pingMessageBytes: pingBytes,
 		messageBufferPool: sync.Pool{
@@ -206,7 +205,6 @@ func NewWebSocketAPI(isMainnet bool) *WebSocketAPI {
 	}
 	client.nextPostID.Store(1)
 	client.isConnected.Store(false)
-	client.debug.Store(false)
 	client.manualDisconnect.Store(false)
 	client.reconnectCount.Store(0)
 	return client
@@ -219,7 +217,7 @@ func (ws *WebSocketAPI) Connect() error {
 		return fmt.Errorf("failed to parse WebSocket URL: %w", err)
 	}
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Printf("Connecting to WebSocket URL: %s", u.String())
 	}
 
@@ -238,8 +236,9 @@ func (ws *WebSocketAPI) Connect() error {
 	ws.manualDisconnect.Store(false) // Reset manual disconnect flag
 	ws.reconnectCount.Store(0)
 	ws.pingStopChan = make(chan struct{}) // Create new stop channel
+	ws.lastPingTime.Store(time.Time{})    // Reset ping time to avoid immediate timeout
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Println("WebSocket connection established")
 	}
 
@@ -315,7 +314,7 @@ func (ws *WebSocketAPI) IsConnected() bool {
 
 // SetDebugActive enables debug mode
 func (ws *WebSocketAPI) SetDebug(status bool) {
-	ws.debug.Store(status)
+	ws.Debug = status
 }
 
 // readMessages reads messages from the WebSocket connection with optimized processing
@@ -332,22 +331,17 @@ func (ws *WebSocketAPI) readMessages() {
 		_, message, err := ws.conn.ReadMessage()
 		if err != nil {
 			// Return buffer to pool on error
-			ws.messageBufferPool.Put(messageBuffer)
+			ws.messageBufferPool.Put(&messageBuffer)
 
-			if ws.debug.Load() {
+			if ws.Debug {
 				log.Printf("WebSocket read error: %v", err)
 			}
-			// Don't reconnect if manually disconnected
-			manualDisconnect := ws.manualDisconnect.Load()
-
-			if !manualDisconnect && ws.reconnectCount.Load() < ws.maxReconnects {
-				ws.reconnect()
-			}
+			// Let ping handler handle reconnection
 			return
 		}
 
-		if ws.debug.Load() {
-			log.Printf("Received WebSocket message: %s", string(message))
+		if ws.Debug {
+			log.Printf("Received WebSocket message: %v", message)
 		}
 
 		// Fast path: Handle special messages without full JSON parsing
@@ -356,14 +350,14 @@ func (ws *WebSocketAPI) readMessages() {
 			case '{':
 				ws.processJSONMessage(message)
 			default:
-				if ws.debug.Load() {
-					log.Printf("Unknown message format: %s", string(message))
+				if ws.Debug {
+					log.Printf("Unknown message format: %v", message)
 				}
 			}
 		}
 
 		// Return buffer to pool after processing
-		ws.messageBufferPool.Put(messageBuffer)
+		ws.messageBufferPool.Put(&messageBuffer)
 	}
 }
 
@@ -377,7 +371,7 @@ func (ws *WebSocketAPI) processJSONMessage(message []byte) {
 	*response = WSResponse{}
 
 	if err := PooledUnmarshal(message, response); err != nil {
-		if ws.debug.Load() {
+		if ws.Debug {
 			log.Printf("Failed to unmarshal WebSocket message: %v", err)
 		}
 		return
@@ -386,7 +380,7 @@ func (ws *WebSocketAPI) processJSONMessage(message []byte) {
 	// Fast path for special messages
 	switch response.Channel {
 	case "subscribed", "subscription", "subscriptionResponse":
-		if ws.debug.Load() {
+		if ws.Debug {
 			log.Printf("Received subscription acknowledgment: %+v", response.Data)
 		}
 		return
@@ -400,7 +394,7 @@ func (ws *WebSocketAPI) processJSONMessage(message []byte) {
 		return
 
 	case "error":
-		if ws.debug.Load() {
+		if ws.Debug {
 			log.Printf("Received error message: %+v", response.Data)
 		}
 		return
@@ -416,7 +410,7 @@ func (ws *WebSocketAPI) handlePong() {
 		if lastPingTime, ok := lastPingTimeValue.(time.Time); ok && !lastPingTime.IsZero() {
 			latency := time.Since(lastPingTime).Milliseconds()
 			ws.latencyMs.Store(latency)
-			if ws.debug.Load() {
+			if ws.Debug {
 				log.Printf("Received pong response, latency: %dms", latency)
 			}
 		}
@@ -427,7 +421,7 @@ func (ws *WebSocketAPI) handlePong() {
 func (ws *WebSocketAPI) handlePostResponse(message []byte) {
 	var postResponse WSPostResponse
 	if err := FastUnmarshal(message, &postResponse); err != nil {
-		if ws.debug.Load() {
+		if ws.Debug {
 			log.Printf("Failed to unmarshal post response: %v", err)
 		}
 		return
@@ -437,11 +431,11 @@ func (ws *WebSocketAPI) handlePostResponse(message []byte) {
 	if ch, exists := ws.postResponses[postResponse.Data.ID]; exists {
 		select {
 		case ch <- postResponse.Data:
-			if ws.debug.Load() {
+			if ws.Debug {
 				log.Printf("Sent post response to channel for ID: %d", postResponse.Data.ID)
 			}
 		default:
-			if ws.debug.Load() {
+			if ws.Debug {
 				log.Printf("Post response channel full for ID: %d", postResponse.Data.ID)
 			}
 		}
@@ -456,7 +450,7 @@ func (ws *WebSocketAPI) processSubscriptionMessage(response *WSResponse) {
 	ws.mu.RUnlock()
 
 	if !exists {
-		if ws.debug.Load() {
+		if ws.Debug {
 			log.Printf("No handlers found for channel: %s", response.Channel)
 		}
 		return
@@ -467,11 +461,11 @@ func (ws *WebSocketAPI) processSubscriptionMessage(response *WSResponse) {
 		if ws.matchesSubscription(handler, response) {
 			select {
 			case handler.Channel <- response.Data:
-				if ws.debug.Load() {
+				if ws.Debug {
 					log.Printf("Sent data to subscription: %s", response.Channel)
 				}
 			default:
-				if ws.debug.Load() {
+				if ws.Debug {
 					log.Printf("Handler channel full, skipping message")
 				}
 			}
@@ -485,9 +479,9 @@ func (ws *WebSocketAPI) addSubscription(channel string, subType SubscriptionType
 	var bufferSize int
 	switch subType {
 	case SubTypeL2Book, SubTypeTrades:
-		bufferSize = 50 // High frequency
+		bufferSize = 100 // High frequency
 	case SubTypeUserFills, SubTypeOrderUpdates:
-		bufferSize = 100 // Medium frequency
+		bufferSize = 50 // Medium frequency
 	default:
 		bufferSize = 10 // Low frequency
 	}
@@ -683,14 +677,35 @@ func (ws *WebSocketAPI) pingHandler() {
 		select {
 		case <-ticker.C:
 			if ws.IsConnected() {
+				// Check for pong timeout before sending new ping
+				if lastPingTimeValue := ws.lastPingTime.Load(); lastPingTimeValue != nil {
+					if lastPingTime, ok := lastPingTimeValue.(time.Time); ok && !lastPingTime.IsZero() {
+						// If no pong received within 45 seconds, trigger reconnection
+						if time.Since(lastPingTime) > 45*time.Second {
+							if ws.Debug {
+								log.Printf("Pong timeout detected, triggering reconnection")
+							}
+							if !ws.manualDisconnect.Load() && ws.reconnectCount.Load() < MAX_RECONNECT {
+								go ws.reconnect()
+							}
+							return
+						}
+					}
+				}
+
 				// Use pre-marshaled ping message for efficiency
 				ws.mu.Lock()
 				err := ws.conn.WriteMessage(websocket.TextMessage, ws.pingMessageBytes)
 				ws.mu.Unlock()
 
 				if err != nil {
-					if ws.debug.Load() {
+					if ws.Debug {
 						log.Printf("Ping failed: %v", err)
+					}
+					// Trigger reconnection on ping failure
+					if !ws.manualDisconnect.Load() && ws.reconnectCount.Load() < MAX_RECONNECT {
+						log.Printf("Ping failed, triggering reconnection")
+						go ws.reconnect()
 					}
 					return
 				}
@@ -698,12 +713,12 @@ func (ws *WebSocketAPI) pingHandler() {
 				// Record the timestamp when ping was sent
 				ws.lastPingTime.Store(time.Now())
 
-				if ws.debug.Load() {
+				if ws.Debug {
 					log.Printf("Ping sent successfully")
 				}
 			}
 		case <-ws.pingStopChan:
-			if ws.debug.Load() {
+			if ws.Debug {
 				log.Printf("Ping handler stopped")
 			}
 			return
@@ -737,9 +752,24 @@ func (ws *WebSocketAPI) reconnect() {
 	ws.mu.RLock()
 	activeSubs := make([]*Subscription, 0, len(ws.subscriptions))
 	for _, sub := range ws.subscriptions {
-		activeSubs = append(activeSubs, sub)
+		// Create a copy of the subscription to avoid race conditions
+		subCopy := &Subscription{
+			Type:     sub.Type,
+			Params:   make(map[string]string),
+			Handler:  sub.Handler,
+			User:     sub.User,
+			Coin:     sub.Coin,
+			Interval: sub.Interval,
+		}
+		// Copy params
+		for k, v := range sub.Params {
+			subCopy.Params[k] = v
+		}
+		activeSubs = append(activeSubs, subCopy)
 	}
 	ws.mu.RUnlock()
+
+	log.Printf("Storing %d active subscriptions for resubscription", len(activeSubs))
 
 	// Close the old connection first to stop existing goroutines
 	ws.mu.Lock()
@@ -769,166 +799,66 @@ func (ws *WebSocketAPI) reconnect() {
 	// Wait a moment for connection to stabilize
 	time.Sleep(100 * time.Millisecond)
 
-	// Clear existing subscriptions to prevent duplicates
-	ws.mu.Lock()
-	ws.subscriptions = make(map[string]*Subscription)
-	ws.channelHandlers = make(map[string][]*Subscription)
-	ws.mu.Unlock()
-
-	// Resubscribe to all active subscriptions using the new optimized approach
+	// Resubscribe to all active subscriptions with retry logic
 	successCount := 0
+
 	for _, sub := range activeSubs {
 		// Reconstruct the original subscription parameters
 		params := make(map[string]interface{})
 
-		switch sub.Type {
-		case SubTypeUserFills:
+		// Add parameters based on subscription type
+		if sub.User != "" {
 			params["user"] = sub.User
-			if err := ws.subscribe("userFills", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("userFills", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe userFills for user %s: %v", sub.User, err)
-			}
-		case SubTypeL2Book:
+		}
+		if sub.Coin != "" {
 			params["coin"] = sub.Coin
-			if err := ws.subscribe("l2Book", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("l2Book", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe l2Book for coin %s: %v", sub.Coin, err)
-			}
-		case SubTypeTrades:
-			params["coin"] = sub.Coin
-			if err := ws.subscribe("trades", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("trades", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe trades for coin %s: %v", sub.Coin, err)
-			}
-		case SubTypeAllMids:
-			if err := ws.subscribe("allMids", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("allMids", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe allMids: %v", err)
-			}
-		case SubTypeUserEvents:
-			params["user"] = sub.User
-			if err := ws.subscribe("userEvents", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("userEvents", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe userEvents for user %s: %v", sub.User, err)
-			}
-		case SubTypeUserFundings:
-			params["user"] = sub.User
-			if err := ws.subscribe("userFundings", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("userFundings", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe userFundings for user %s: %v", sub.User, err)
-			}
-		case SubTypeUserNonFundingLedgerUpdates:
-			params["user"] = sub.User
-			if err := ws.subscribe("userNonFundingLedgerUpdates", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("userNonFundingLedgerUpdates", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe userNonFundingLedgerUpdates for user %s: %v", sub.User, err)
-			}
-		case SubTypeUserTwapSliceFills:
-			params["user"] = sub.User
-			if err := ws.subscribe("userTwapSliceFills", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("userTwapSliceFills", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe userTwapSliceFills for user %s: %v", sub.User, err)
-			}
-		case SubTypeUserTwapHistory:
-			params["user"] = sub.User
-			if err := ws.subscribe("userTwapHistory", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("userTwapHistory", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe userTwapHistory for user %s: %v", sub.User, err)
-			}
-		case SubTypeActiveAssetCtx:
-			params["coin"] = sub.Coin
-			if err := ws.subscribe("activeAssetCtx", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("activeAssetCtx", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe activeAssetCtx for coin %s: %v", sub.Coin, err)
-			}
-		case SubTypeActiveAssetData:
-			params["user"] = sub.User
-			params["coin"] = sub.Coin
-			if err := ws.subscribe("activeAssetData", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("activeAssetData", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe activeAssetData for user %s coin %s: %v", sub.User, sub.Coin, err)
-			}
-		case SubTypeBbo:
-			params["coin"] = sub.Coin
-			if err := ws.subscribe("bbo", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("bbo", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe bbo for coin %s: %v", sub.Coin, err)
-			}
-		case SubTypeCandle:
-			params["coin"] = sub.Coin
+		}
+		if sub.Interval != "" {
 			params["interval"] = sub.Interval
-			if err := ws.subscribe("candle", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("candle", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe candle for coin %s interval %s: %v", sub.Coin, sub.Interval, err)
-			}
-		case SubTypeOrderUpdates:
-			params["user"] = sub.User
-			if err := ws.subscribe("orderUpdates", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("orderUpdates", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe orderUpdates for user %s: %v", sub.User, err)
-			}
-		case SubTypeNotification:
-			params["user"] = sub.User
-			if err := ws.subscribe("notification", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("notification", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe notification for user %s: %v", sub.User, err)
-			}
-		case SubTypeWebData2:
-			params["user"] = sub.User
-			if err := ws.subscribe("webData2", params); err == nil {
-				// Restore the handler function
-				ws.addSubscription("webData2", sub.Type, sub.Handler, sub.Params)
-				successCount++
-			} else {
-				log.Printf("Failed to resubscribe webData2 for user %s: %v", sub.User, err)
-			}
-		default:
+		}
+
+		// Get the subscription type name
+		subTypeName := getChannelName(sub.Type)
+		if subTypeName == "" {
 			log.Printf("Unknown subscription type during resubscribe: %v", sub.Type)
+			continue
+		}
+
+		// Generate the channel key to check if already subscribed
+		var channelKey string
+		switch sub.Type {
+		case SubTypeTrades, SubTypeL2Book, SubTypeBbo, SubTypeActiveAssetCtx:
+			channelKey = fmt.Sprintf("%s:%s", subTypeName, sub.Coin)
+		case SubTypeUserFills, SubTypeUserEvents, SubTypeUserFundings, SubTypeUserNonFundingLedgerUpdates,
+			SubTypeUserTwapSliceFills, SubTypeUserTwapHistory, SubTypeOrderUpdates, SubTypeNotification, SubTypeWebData2:
+			channelKey = fmt.Sprintf("%s:%s", subTypeName, sub.User)
+		case SubTypeActiveAssetData:
+			channelKey = fmt.Sprintf("%s:%s:%s", subTypeName, sub.User, sub.Coin)
+		case SubTypeCandle:
+			channelKey = fmt.Sprintf("%s:%s:%s", subTypeName, sub.Coin, sub.Interval)
+		case SubTypeAllMids:
+			channelKey = subTypeName
+		default:
+			channelKey = fmt.Sprintf("%s:%s", subTypeName, sub.Coin)
+		}
+
+		// Check if already subscribed to avoid duplicates
+		ws.mu.RLock()
+		if _, exists := ws.subscriptions[channelKey]; exists {
+			ws.mu.RUnlock()
+			log.Printf("Already subscribed to %s, skipping", channelKey)
+			successCount++
+			continue
+		}
+		ws.mu.RUnlock()
+
+		// Try to resubscribe (single attempt since reconnect has backoff)
+		if err := ws.subscribe(subTypeName, params); err == nil {
+			// Restore the handler function
+			ws.addSubscription(channelKey, sub.Type, sub.Handler, sub.Params)
+			successCount++
+		} else {
+			log.Printf("Failed to resubscribe %s: %v", subTypeName, err)
 		}
 	}
 
@@ -962,7 +892,7 @@ func (ws *WebSocketAPI) subscribe(subType string, params map[string]interface{})
 		return err
 	}
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Printf("Sending subscription message (format 1): %s", string(b))
 	}
 
@@ -974,7 +904,7 @@ func (ws *WebSocketAPI) subscribe(subType string, params map[string]interface{})
 		return err
 	}
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Printf("Subscription message sent successfully for type: %s", subType)
 	}
 
@@ -1008,7 +938,7 @@ func (ws *WebSocketAPI) unsubscribe(subType string, params map[string]interface{
 		return err
 	}
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Printf("Sending unsubscribe message: %s", string(b))
 	}
 
@@ -1020,7 +950,7 @@ func (ws *WebSocketAPI) unsubscribe(subType string, params map[string]interface{
 		return err
 	}
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Printf("Unsubscribe message sent successfully for type: %s", subType)
 	}
 
@@ -1050,7 +980,7 @@ func (ws *WebSocketAPI) removeSubscription(channel string) error {
 			}
 		}
 
-		if ws.debug.Load() {
+		if ws.Debug {
 			log.Printf("Removed subscription for channel: %s", channel)
 		}
 	}
@@ -1322,11 +1252,6 @@ func (ws *WebSocketAPI) SubscribeWebData2(user string, handler SubscriptionHandl
 	return ws.subscribe("webData2", map[string]interface{}{"user": user})
 }
 
-// GetLatency returns the current latency in milliseconds
-func (ws *WebSocketAPI) GetLatency() int64 {
-	return ws.latencyMs.Load()
-}
-
 // PostRequest sends a post request through WebSocket and returns the response
 func (ws *WebSocketAPI) PostRequest(requestType string, payload interface{}) (*WSPostResponseData, error) {
 	postID := int(ws.nextPostID.Add(1))
@@ -1360,7 +1285,7 @@ func (ws *WebSocketAPI) PostRequest(requestType string, payload interface{}) (*W
 		return nil, fmt.Errorf("failed to marshal post request: %w", err)
 	}
 
-	if ws.debug.Load() {
+	if ws.Debug {
 		log.Printf("Sending post request: %s", string(b))
 	}
 

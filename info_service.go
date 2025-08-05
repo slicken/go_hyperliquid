@@ -32,7 +32,6 @@ type IInfoAPI interface {
 	BuildMetaMap() (map[string]AssetInfo, error)
 	GetWithdrawals(address string) (*[]Withdrawal, error)
 	GetAccountWithdrawals() (*[]Withdrawal, error)
-	GetLatency() int64
 }
 
 type InfoAPI struct {
