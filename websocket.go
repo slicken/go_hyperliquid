@@ -323,15 +323,8 @@ func (ws *WebSocketAPI) readMessages() {
 	}()
 
 	for {
-		// Get message buffer from pool
-		messageBuffer := ws.messageBufferPool.Get().([]byte)
-		messageBuffer = messageBuffer[:0] // Reset buffer
-
 		_, message, err := ws.conn.ReadMessage()
 		if err != nil {
-			// Return buffer to pool on error
-			ws.messageBufferPool.Put(&messageBuffer)
-
 			if ws.Debug {
 				log.Printf("WebSocket read error: %v", err)
 			}
@@ -343,20 +336,8 @@ func (ws *WebSocketAPI) readMessages() {
 			log.Printf("Received WebSocket message: %v", message)
 		}
 
-		// Fast path: Handle special messages without full JSON parsing
-		if len(message) > 0 {
-			switch message[0] {
-			case '{':
-				ws.processJSONMessage(message)
-			default:
-				if ws.Debug {
-					log.Printf("Unknown message format: %v", message)
-				}
-			}
-		}
-
-		// Return buffer to pool after processing
-		ws.messageBufferPool.Put(&messageBuffer)
+		// Process all messages as JSON
+		ws.processJSONMessage(message)
 	}
 }
 
@@ -419,7 +400,7 @@ func (ws *WebSocketAPI) handlePong() {
 // handlePostResponse processes post response messages
 func (ws *WebSocketAPI) handlePostResponse(message []byte) {
 	var postResponse WSPostResponse
-	if err := FastUnmarshal(message, &postResponse); err != nil {
+	if err := PooledUnmarshal(message, &postResponse); err != nil {
 		if ws.Debug {
 			log.Printf("Failed to unmarshal post response: %v", err)
 		}
