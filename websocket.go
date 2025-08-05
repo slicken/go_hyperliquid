@@ -12,8 +12,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const MAX_RECONNECT = 5
-
 // IWebSocketAPI is the interface for WebSocket operations
 type IWebSocketAPI interface {
 	Connect() error
@@ -90,9 +88,9 @@ const (
 // Subscription represents a subscription with optimized matching
 type Subscription struct {
 	Type     SubscriptionType
+	Channel  chan interface{}
 	Params   map[string]string // Pre-split parameters
 	Handler  SubscriptionHandler
-	Channel  chan interface{}
 	User     string // For user-specific subscriptions
 	Coin     string // For coin-specific subscriptions
 	Interval string // For candle subscriptions
@@ -105,10 +103,10 @@ type WebSocketAPI struct {
 	channelHandlers  map[string][]*Subscription // Fast lookup by channel
 	postResponses    map[int]chan WSPostResponseData
 	mu               sync.RWMutex
-	reconnectCount   atomic.Int32
-	isConnected      atomic.Bool
+	reconnectCount   int
+	isConnected      bool
 	Debug            bool
-	manualDisconnect atomic.Bool  // Flag to prevent auto-reconnect on manual disconnect
+	manualDisconnect bool         // Flag to prevent auto-reconnect on manual disconnect
 	latencyMs        atomic.Int64 // Current latency in milliseconds
 	lastPingTime     atomic.Value // Timestamp of the last ping sent (time.Time)
 	nextPostID       atomic.Int64 // Next post request ID
@@ -203,10 +201,11 @@ func NewWebSocketAPI(isMainnet bool) *WebSocketAPI {
 			},
 		},
 	}
+
+	client.manualDisconnect = false
 	client.nextPostID.Store(1)
-	client.isConnected.Store(false)
-	client.manualDisconnect.Store(false)
-	client.reconnectCount.Store(0)
+	client.isConnected = false
+	client.reconnectCount = 0
 	return client
 }
 
@@ -232,9 +231,9 @@ func (ws *WebSocketAPI) Connect() error {
 	}
 
 	ws.conn = conn
-	ws.isConnected.Store(true)
-	ws.manualDisconnect.Store(false) // Reset manual disconnect flag
-	ws.reconnectCount.Store(0)
+	ws.isConnected = true
+	ws.manualDisconnect = false // Reset manual disconnect flag
+	ws.reconnectCount = 0
 	ws.pingStopChan = make(chan struct{}) // Create new stop channel
 	ws.lastPingTime.Store(time.Time{})    // Reset ping time to avoid immediate timeout
 
@@ -253,9 +252,9 @@ func (ws *WebSocketAPI) Disconnect() error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	ws.isConnected.Store(false)
-	ws.manualDisconnect.Store(true) // Prevent auto-reconnect
-	ws.reconnectCount.Store(0)      // Reset reconnect count on manual disconnect
+	ws.isConnected = false
+	ws.manualDisconnect = true // Prevent auto-reconnect
+	ws.reconnectCount = 0      // Reset reconnect count on manual disconnect
 
 	// Stop ping handler
 	if ws.pingStopChan != nil {
@@ -291,7 +290,7 @@ func (ws *WebSocketAPI) DisconnectForTesting() error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	ws.isConnected.Store(false)
+	ws.isConnected = false
 	// Don't set manualDisconnect = true, so auto-reconnect will work
 	// Don't reset reconnectCount, so it continues from where it left off
 
@@ -309,7 +308,7 @@ func (ws *WebSocketAPI) DisconnectForTesting() error {
 
 // IsConnected returns the connection status
 func (ws *WebSocketAPI) IsConnected() bool {
-	return ws.isConnected.Load()
+	return ws.isConnected
 }
 
 // SetDebugActive enables debug mode
@@ -320,7 +319,7 @@ func (ws *WebSocketAPI) SetDebug(status bool) {
 // readMessages reads messages from the WebSocket connection with optimized processing
 func (ws *WebSocketAPI) readMessages() {
 	defer func() {
-		ws.isConnected.Store(false)
+		ws.isConnected = false
 	}()
 
 	for {
@@ -685,7 +684,7 @@ func (ws *WebSocketAPI) pingHandler() {
 							if ws.Debug {
 								log.Printf("Pong timeout detected, triggering reconnection")
 							}
-							if !ws.manualDisconnect.Load() && ws.reconnectCount.Load() < MAX_RECONNECT {
+							if !ws.manualDisconnect {
 								go ws.reconnect()
 							}
 							return
@@ -703,7 +702,7 @@ func (ws *WebSocketAPI) pingHandler() {
 						log.Printf("Ping failed: %v", err)
 					}
 					// Trigger reconnection on ping failure
-					if !ws.manualDisconnect.Load() && ws.reconnectCount.Load() < MAX_RECONNECT {
+					if !ws.manualDisconnect {
 						log.Printf("Ping failed, triggering reconnection")
 						go ws.reconnect()
 					}
@@ -728,10 +727,10 @@ func (ws *WebSocketAPI) pingHandler() {
 
 // reconnect attempts to reconnect to the WebSocket server
 func (ws *WebSocketAPI) reconnect() {
-	ws.reconnectCount.Add(1)
+	ws.reconnectCount++
 
 	var backoff time.Duration
-	switch ws.reconnectCount.Load() {
+	switch ws.reconnectCount {
 	case 1:
 		backoff = 1 * time.Second
 	case 2:
@@ -739,7 +738,7 @@ func (ws *WebSocketAPI) reconnect() {
 	case 3:
 		backoff = 10 * time.Second
 	case 4:
-		backoff = 1 * time.Minute
+		backoff = 30 * time.Minute
 	case 5:
 		backoff = 1 * time.Hour
 	default:
@@ -777,7 +776,7 @@ func (ws *WebSocketAPI) reconnect() {
 		ws.conn.Close()
 		ws.conn = nil
 	}
-	ws.isConnected.Store(false)
+	ws.isConnected = false
 
 	// Stop ping handler
 	if ws.pingStopChan != nil {
