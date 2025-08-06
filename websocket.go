@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -436,7 +435,7 @@ func (ws *WebSocketAPI) processSubscriptionMessage(response *WSResponse) {
 		return
 	}
 
-	// Process all handlers for this channel
+	// Process all handlers for this channel with essential filtering
 	for _, handler := range handlers {
 		if ws.matchesSubscription(handler, response) {
 			select {
@@ -451,6 +450,233 @@ func (ws *WebSocketAPI) processSubscriptionMessage(response *WSResponse) {
 			}
 		}
 	}
+}
+
+// matchesSubscription efficiently checks if a message matches a subscription
+func (ws *WebSocketAPI) matchesSubscription(sub *Subscription, response *WSResponse) bool {
+	switch sub.Type {
+	case SubTypeUserFills:
+		return ws.matchUserFills(sub, response)
+	case SubTypeL2Book:
+		return ws.matchL2Book(sub, response)
+	case SubTypeTrades:
+		return ws.matchTrades(sub, response)
+	case SubTypeOrderUpdates:
+		return ws.matchOrderUpdates(sub, response)
+	case SubTypeUserEvents:
+		return ws.matchUserEvents(sub, response)
+	case SubTypeUserFundings:
+		return ws.matchUserFundings(sub, response)
+	case SubTypeUserNonFundingLedgerUpdates:
+		return ws.matchUserNonFundingLedgerUpdates(sub, response)
+	case SubTypeUserTwapSliceFills:
+		return ws.matchUserTwapSliceFills(sub, response)
+	case SubTypeUserTwapHistory:
+		return ws.matchUserTwapHistory(sub, response)
+	case SubTypeNotification:
+		return ws.matchNotification(sub, response)
+	case SubTypeWebData2:
+		return ws.matchWebData2(sub, response)
+	case SubTypeActiveAssetCtx:
+		return ws.matchActiveAssetCtx(sub, response)
+	case SubTypeActiveAssetData:
+		return ws.matchActiveAssetData(sub, response)
+	case SubTypeBbo:
+		return ws.matchBbo(sub, response)
+	case SubTypeCandle:
+		return ws.matchCandle(sub, response)
+	case SubTypeAllMids:
+		return true // Accept all mids
+	default:
+		return false
+	}
+}
+
+// Essential matching functions - optimized for performance
+func (ws *WebSocketAPI) matchUserFills(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User // Direct comparison, no strings.EqualFold
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchTrades(sub *Subscription, response *WSResponse) bool {
+	// For trades, we need to check if any trade in the array matches the coin
+	if tradesArray, ok := response.Data.([]interface{}); ok {
+		for _, trade := range tradesArray {
+			if tradeMap, ok := trade.(map[string]interface{}); ok {
+				if coin, exists := tradeMap["coin"]; exists {
+					if coinStr, ok := coin.(string); ok {
+						if coinStr == sub.Coin {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchL2Book(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if coin, exists := dataMap["coin"]; exists {
+			if coinStr, ok := coin.(string); ok {
+				return coinStr == sub.Coin
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchActiveAssetCtx(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if coin, exists := dataMap["coin"]; exists {
+			if coinStr, ok := coin.(string); ok {
+				return coinStr == sub.Coin
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchActiveAssetData(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				if userStr != sub.User {
+					return false
+				}
+			}
+		}
+		if coin, exists := dataMap["coin"]; exists {
+			if coinStr, ok := coin.(string); ok {
+				return coinStr == sub.Coin
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchOrderUpdates(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchUserEvents(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchUserFundings(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchUserNonFundingLedgerUpdates(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchUserTwapSliceFills(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchUserTwapHistory(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchNotification(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchWebData2(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if user, exists := dataMap["user"]; exists {
+			if userStr, ok := user.(string); ok {
+				return userStr == sub.User
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchBbo(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if coin, exists := dataMap["coin"]; exists {
+			if coinStr, ok := coin.(string); ok {
+				return coinStr == sub.Coin
+			}
+		}
+	}
+	return false
+}
+
+func (ws *WebSocketAPI) matchCandle(sub *Subscription, response *WSResponse) bool {
+	if dataMap, ok := response.Data.(map[string]interface{}); ok {
+		if coin, exists := dataMap["s"]; exists {
+			if coinStr, ok := coin.(string); ok {
+				if coinStr != sub.Coin {
+					return false
+				}
+			}
+		}
+		if interval, exists := dataMap["i"]; exists {
+			if intervalStr, ok := interval.(string); ok {
+				return intervalStr == sub.Interval
+			}
+		}
+	}
+	return false
 }
 
 // addSubscription adds a subscription with optimized storage
@@ -530,249 +756,8 @@ func getChannelName(subType SubscriptionType) string {
 	case SubTypeAllMids:
 		return "allMids"
 	default:
-		return ""
+		return "unknown"
 	}
-}
-
-// matchesSubscription efficiently checks if a message matches a subscription
-func (ws *WebSocketAPI) matchesSubscription(sub *Subscription, response *WSResponse) bool {
-	switch sub.Type {
-	case SubTypeUserFills:
-		return ws.matchUserFills(sub, response)
-	case SubTypeL2Book:
-		return ws.matchL2Book(sub, response)
-	case SubTypeTrades:
-		return ws.matchTrades(sub, response)
-	case SubTypeOrderUpdates:
-		return ws.matchOrderUpdates(sub, response)
-	case SubTypeUserEvents:
-		return ws.matchUserEvents(sub, response)
-	case SubTypeUserFundings:
-		return ws.matchUserFundings(sub, response)
-	case SubTypeUserNonFundingLedgerUpdates:
-		return ws.matchUserNonFundingLedgerUpdates(sub, response)
-	case SubTypeUserTwapSliceFills:
-		return ws.matchUserTwapSliceFills(sub, response)
-	case SubTypeUserTwapHistory:
-		return ws.matchUserTwapHistory(sub, response)
-	case SubTypeNotification:
-		return ws.matchNotification(sub, response)
-	case SubTypeWebData2:
-		return ws.matchWebData2(sub, response)
-	case SubTypeActiveAssetCtx:
-		return ws.matchActiveAssetCtx(sub, response)
-	case SubTypeActiveAssetData:
-		return ws.matchActiveAssetData(sub, response)
-	case SubTypeBbo:
-		return ws.matchBbo(sub, response)
-	case SubTypeCandle:
-		return ws.matchCandle(sub, response)
-	case SubTypeAllMids:
-		return true // Accept all mids
-	default:
-		return false
-	}
-}
-
-// matchUserFills checks if user fills message matches subscription
-func (ws *WebSocketAPI) matchUserFills(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchTrades checks if trades message matches subscription
-func (ws *WebSocketAPI) matchTrades(sub *Subscription, response *WSResponse) bool {
-	// For trades, we need to check if any trade in the array matches the coin
-	if tradesArray, ok := response.Data.([]interface{}); ok {
-		for _, trade := range tradesArray {
-			if tradeMap, ok := trade.(map[string]interface{}); ok {
-				if coin, exists := tradeMap["coin"]; exists {
-					if coinStr, ok := coin.(string); ok {
-						if coinStr == sub.Coin {
-							return true
-						}
-					}
-				}
-			}
-		}
-	}
-	return false
-}
-
-// matchL2Book checks if l2book message matches subscription
-func (ws *WebSocketAPI) matchL2Book(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if coin, exists := dataMap["coin"]; exists {
-			if coinStr, ok := coin.(string); ok {
-				return coinStr == sub.Coin
-			}
-		}
-	}
-	return false
-}
-
-// matchActiveAssetCtx checks if active asset context message matches subscription
-func (ws *WebSocketAPI) matchActiveAssetCtx(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if coin, exists := dataMap["coin"]; exists {
-			if coinStr, ok := coin.(string); ok {
-				return coinStr == sub.Coin
-			}
-		}
-	}
-	return false
-}
-
-// matchActiveAssetData checks if active asset data message matches subscription
-func (ws *WebSocketAPI) matchActiveAssetData(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				if !strings.EqualFold(userStr, sub.User) {
-					return false
-				}
-			}
-		}
-		if coin, exists := dataMap["coin"]; exists {
-			if coinStr, ok := coin.(string); ok {
-				return coinStr == sub.Coin
-			}
-		}
-	}
-	return false
-}
-
-// matchOrderUpdates checks if order updates message matches subscription
-func (ws *WebSocketAPI) matchOrderUpdates(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchUserEvents checks if user events message matches subscription
-func (ws *WebSocketAPI) matchUserEvents(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchUserFundings checks if user fundings message matches subscription
-func (ws *WebSocketAPI) matchUserFundings(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchUserNonFundingLedgerUpdates checks if user non-funding ledger updates message matches subscription
-func (ws *WebSocketAPI) matchUserNonFundingLedgerUpdates(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchUserTwapSliceFills checks if user TWAP slice fills message matches subscription
-func (ws *WebSocketAPI) matchUserTwapSliceFills(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchUserTwapHistory checks if user TWAP history message matches subscription
-func (ws *WebSocketAPI) matchUserTwapHistory(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchNotification checks if notification message matches subscription
-func (ws *WebSocketAPI) matchNotification(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchWebData2 checks if web data 2 message matches subscription
-func (ws *WebSocketAPI) matchWebData2(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return strings.EqualFold(userStr, sub.User)
-			}
-		}
-	}
-	return false
-}
-
-// matchBbo checks if bbo message matches subscription
-func (ws *WebSocketAPI) matchBbo(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if coin, exists := dataMap["coin"]; exists {
-			if coinStr, ok := coin.(string); ok {
-				return coinStr == sub.Coin
-			}
-		}
-	}
-	return false
-}
-
-// matchCandle checks if candle message matches subscription
-func (ws *WebSocketAPI) matchCandle(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if coin, exists := dataMap["s"]; exists {
-			if coinStr, ok := coin.(string); ok {
-				if coinStr != sub.Coin {
-					return false
-				}
-			}
-		}
-		if interval, exists := dataMap["i"]; exists {
-			if intervalStr, ok := interval.(string); ok {
-				return intervalStr == sub.Interval
-			}
-		}
-	}
-	return false
 }
 
 // pingHandler sends periodic ping messages to keep the connection alive
@@ -926,7 +911,7 @@ func (ws *WebSocketAPI) reconnect() {
 
 		// Get the subscription type name
 		subTypeName := getChannelName(sub.Type)
-		if subTypeName == "" {
+		if subTypeName == "unknown" {
 			log.Printf("Unknown subscription type during resubscribe: %v", sub.Type)
 			continue
 		}
