@@ -563,14 +563,7 @@ func (ws *WebSocketAPI) matchActiveAssetData(sub *Subscription, response *WSResp
 }
 
 func (ws *WebSocketAPI) matchOrderUpdates(sub *Subscription, response *WSResponse) bool {
-	if dataMap, ok := response.Data.(map[string]interface{}); ok {
-		if user, exists := dataMap["user"]; exists {
-			if userStr, ok := user.(string); ok {
-				return userStr == sub.User
-			}
-		}
-	}
-	return false
+	return response.Channel == "orderUpdates"
 }
 
 func (ws *WebSocketAPI) matchUserEvents(sub *Subscription, response *WSResponse) bool {
@@ -681,6 +674,22 @@ func (ws *WebSocketAPI) matchCandle(sub *Subscription, response *WSResponse) boo
 
 // addSubscription adds a subscription with optimized storage
 func (ws *WebSocketAPI) addSubscription(channel string, subType SubscriptionType, handler SubscriptionHandler, params map[string]string) error {
+	// Check for existing subscription for user-specific channels
+	user := params["user"]
+	if user != "" {
+		// For user-specific channels, check if subscription already exists for this user
+		channelName := getChannelName(subType)
+		ws.mu.RLock()
+		for _, existingSub := range ws.channelHandlers[channelName] {
+			if existingSub.User == user {
+				ws.mu.RUnlock()
+				// Subscription already exists for this user, return without error
+				return nil
+			}
+		}
+		ws.mu.RUnlock()
+	}
+
 	// Create subscription with appropriate buffer size
 	var bufferSize int
 	switch subType {

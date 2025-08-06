@@ -1,0 +1,69 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	hyperliquid "go_hyperliquid"
+)
+
+func main() {
+	// Initialize client with automatic WebSocket fallback
+	config := &hyperliquid.HyperliquidClientConfig{
+		IsMainnet:      true,
+		AccountAddress: strings.ToLower(os.Getenv("HYPERLIQUID_API_KEY")),    // Main account address
+		PrivateKey:     strings.ToLower(os.Getenv("HYPERLIQUID_API_SECRET")), // API wallet private key
+	}
+	hl := hyperliquid.NewHyperliquid(config)
+	err := hl.WebSocketAPI.Connect()
+	if err != nil {
+		log.Printf("WebSocket connection failed, will use HTTP: %v", err)
+	} else {
+		log.Printf("WebSocket connected successfully")
+	}
+	hl.WebSocketAPI.SetDebug(false)
+
+	log.Println("1. Subscribing to all Assets trades channels but ONLY use handler to print BTC")
+
+	meta, err := hl.GetMeta()
+	if err != nil {
+		log.Printf("Error getting meta: %v", err)
+	} else {
+		for _, asset := range meta.Universe {
+			if asset.Name == "BTC" {
+				log.Println("1. Subscribing to", asset.Name)
+				hl.WebSocketAPI.SubscribeTrades(asset.Name, func(data interface{}) {
+					trades, ok := data.([]interface{})
+					if !ok {
+						log.Println("Unexpected trade data type")
+						return
+					}
+					log.Println("1.", len(trades))
+				})
+			} else {
+				hl.WebSocketAPI.SubscribeTrades(asset.Name, func(data interface{}) {})
+			}
+		}
+	}
+
+	// log.Println("2. Subscribing to only BTC and handling the trades")
+
+	// hl.WebSocketAPI.SubscribeTrades("BTC", func(data interface{}) {
+	// 	trades, ok := data.([]interface{})
+	// 	if !ok {
+	// 		log.Println("Unexpected trade data type")
+	// 		return
+	// 	}
+	// 	log.Println("2.", len(trades))
+	// })
+
+	// Wait for interrupt signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+	fmt.Println("\nShutting down...")
+}
